@@ -4,4 +4,4 @@ requests>=2.28.0
 Jinja2>=3.1.0
 baostock>=0.8.8
 feedparser>=6.0.10
-levistock>=1.0.0
+levistock>=0.1.0
