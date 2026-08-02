@@ -1,11 +1,10 @@
 import logging
 from datetime import datetime
 
+
 def generate_risk_alerts(data):
-    """基于数据动态生成风险提示"""
     risks = []
 
-    # ---------- 安全获取指数数据 ----------
     indices = data.get('indices', {})
     if not isinstance(indices, dict):
         indices = {}
@@ -25,20 +24,15 @@ def generate_risk_alerts(data):
     weekly = data.get('weekly', {})
     vol_trend = weekly.get('vol_trend', [])
 
-    # ---------- 各风险条件 ----------
-    # 1. 中报业绩风险（8月窗口）
     if datetime.now().month == 8:
         risks.append("📊 8月进入中报密集披露期，无业绩支撑标的面临回调风险")
 
-    # 2. 套牢盘压力
     if sh_price > 3800:
         risks.append(f"📈 上证指数{sh_price:.0f}点接近前期密集套牢区（3850点上方），突破需持续增量资金配合")
 
-    # 3. 风格切换风险
     if abs(cy_pct) > 0.1 and abs(sz_pct) > 0.1 and (cy_pct - sz_pct) > 2:
         risks.append(f"🔄 创业板（{cy_pct:+.2f}%）与上证50（{sz_pct:+.2f}%）分化超2%，若权重持续走弱可能拖累全市场")
 
-    # 4. 量能萎缩风险
     if vol_trend and len(vol_trend) > 1:
         try:
             vol_avg = sum(vol_trend) / len(vol_trend) / 1e8
@@ -47,7 +41,6 @@ def generate_risk_alerts(data):
         except:
             pass
 
-    # 5. 板块拥挤度
     sector_top = data.get('sector_top5', [])
     sector_bottom = data.get('sector_bottom5', [])
     if sector_top and sector_bottom:
@@ -59,7 +52,6 @@ def generate_risk_alerts(data):
         except:
             pass
 
-    # 6. 外部风险
     for news in data.get('news', []):
         if '海外' in news or '美股' in news or '外围' in news:
             risks.append("🌍 需关注海外市场波动对明日A股开盘情绪的影响")

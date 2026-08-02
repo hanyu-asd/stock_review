@@ -38,7 +38,7 @@ def main():
         logging.info("⚠️ 步骤3: 动态生成风险提示...")
         data['risks'] = generate_risk_alerts(data)
 
-        # 🧪 验证索引键名
+        # 调试：打印指数键名
         logging.info(f"🔍 indices keys: {list(data['indices'].keys())}")
 
         # 4. 生成报告

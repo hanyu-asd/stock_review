@@ -11,7 +11,6 @@ def call_ai_analysis(data):
         logging.warning("⚠️ 未配置 MODELSCOPE_SDK_TOKEN，跳过AI分析")
         return None
 
-    # 构建摘要
     try:
         sh = data['indices'].get('上证指数', {})
         cy = data['indices'].get('创业板指', {})
@@ -79,7 +78,6 @@ def call_ai_analysis(data):
 
         if response.status_code == 200:
             resp_json = response.json()
-            # 安全解析
             choices = resp_json.get('choices', [])
             if choices and len(choices) > 0:
                 message = choices[0].get('message', {})
@@ -108,7 +106,6 @@ def call_ai_analysis(data):
 
 
 def generate_template_outlook(data):
-    """AI不可用时的降级模板"""
     weekly = data.get('weekly', {})
     direction = weekly.get('trend_direction', '震荡')
     strength = weekly.get('trend_strength', 0)

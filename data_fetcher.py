@@ -12,10 +12,8 @@ manager = DataSourceManager()
 
 
 def get_last_trading_day(target_date=None):
-    """获取最近的交易日"""
     if target_date is None:
         target_date = datetime.now()
-
     try:
         trade_days = ak.tool_trade_date_hist_sina()
         trade_days = pd.to_datetime(trade_days['trade_date'])
@@ -26,8 +24,6 @@ def get_last_trading_day(target_date=None):
             return last
     except Exception as e:
         logging.warning(f"获取交易日历失败: {e}")
-
-    # 降级：周末回退到周五
     if target_date.weekday() >= 5:
         days_back = target_date.weekday() - 4
         last = (target_date - timedelta(days=days_back)).strftime('%Y-%m-%d')
@@ -37,7 +33,6 @@ def get_last_trading_day(target_date=None):
 
 
 def fetch_market_news_with_fallback():
-    """获取消息"""
     try:
         df = manager.fetch_with_fallback("news")
         if df is not None and not df.empty:
@@ -51,7 +46,6 @@ def fetch_market_news_with_fallback():
     except Exception as e:
         logging.warning(f"新闻获取失败: {e}")
 
-    # 动态生成
     today = datetime.now().strftime('%Y-%m-%d')
     return [
         f"{today} A股市场震荡分化，科技板块表现活跃",
@@ -61,13 +55,10 @@ def fetch_market_news_with_fallback():
 
 
 def fetch_weekly_summary(last_date_str):
-    """获取最近一周的指数趋势"""
     try:
-        # 尝试获取日线数据
         df = manager.fetch_with_fallback("index_daily", symbol="sh000001")
         if df is None or df.empty:
             df = manager.fetch_with_fallback("index_daily", symbol="sh.000001")
-
         if df is not None and not df.empty:
             if 'date' in df.columns:
                 df['date'] = pd.to_datetime(df['date'])
@@ -106,7 +97,6 @@ def get_fallback_market():
 
 
 def fetch_market_data():
-    """主数据获取函数"""
     data_date_str = get_last_trading_day()
     logging.info(f"📅 使用数据日期: {data_date_str}")
 
@@ -124,9 +114,28 @@ def fetch_market_data():
 
     # ===== 1. 指数数据 =====
     try:
-        # 方式A：尝试从实时接口获取
         spot = manager.fetch_with_fallback("index_spot")
         if spot is not None and not spot.empty:
+            # 动态列名
+            code_col = None
+            cols = {}
+            for col in spot.columns:
+                if '代码' in col or 'code' in col.lower():
+                    code_col = col
+                if '最新价' in col or 'close' in col.lower():
+                    cols['最新价'] = col
+                if '涨跌幅' in col:
+                    cols['涨跌幅'] = col
+                if '振幅' in col:
+                    cols['振幅'] = col
+                if '成交额' in col:
+                    cols['成交额'] = col
+            if code_col is None:
+                code_col = '代码'
+            for k in ['最新价', '涨跌幅', '振幅', '成交额']:
+                if k not in cols:
+                    cols[k] = k
+
             index_map = {
                 "上证指数": "000001",
                 "深证成指": "399001",
@@ -135,17 +144,24 @@ def fetch_market_data():
                 "上证50": "000016"
             }
             for name, code in index_map.items():
-                row = spot[spot["代码"] == code]
+                row = spot[spot[code_col] == code]
                 if not row.empty:
+                    r = row.iloc[0]
                     data["indices"][name] = {
-                        "最新价": round(float(row["最新价"].iloc[0]), 2),
-                        "涨跌幅": round(float(row["涨跌幅"].iloc[0]), 2),
-                        "振幅": round(float(row["振幅"].iloc[0]), 2),
-                        "成交额": round(float(row["成交额"].iloc[0]) / 1e8, 2)
+                        "最新价": round(float(r.get(cols['最新价'], 0)), 2),
+                        "涨跌幅": round(float(r.get(cols['涨跌幅'], 0)), 2),
+                        "振幅": round(float(r.get(cols['振幅'], 0)), 2),
+                        "成交额": round(float(r.get(cols['成交额'], 0)) / 1e8, 2)
                     }
-            logging.info("✅ 指数数据获取成功 (实时接口)")
+            if data["indices"]:
+                logging.info(f"✅ 指数实时数据成功，共 {len(data['indices'])} 条")
+            else:
+                raise Exception("实时数据未获取到任何指数")
         else:
-            # 方式B：从日线数据获取最近一天
+            raise Exception("实时数据返回空")
+    except Exception as e:
+        logging.warning(f"实时指数获取失败: {e}，尝试历史日线")
+        try:
             df = manager.fetch_with_fallback("index_daily", symbol="sh000001")
             if df is not None and not df.empty:
                 df['date'] = pd.to_datetime(df['date'])
@@ -157,16 +173,21 @@ def fetch_market_data():
                     "振幅": 0,
                     "成交额": round(float(last.get("amount", 0)) / 1e8, 2)
                 }
-                # 其他指数用预置
-                for name in ["深证成指", "创业板指", "科创50", "上证50"]:
-                    data["indices"][name] = get_fallback_indices()[name]
-                logging.info("✅ 从日线获取指数数据")
+                fallback = {
+                    "深证成指": {"最新价": 13578.93, "涨跌幅": 0, "振幅": 0, "成交额": 13543},
+                    "创业板指": {"最新价": 3343.96, "涨跌幅": 0, "振幅": 0, "成交额": 6712},
+                    "科创50": {"最新价": 1635.96, "涨跌幅": 0, "振幅": 0, "成交额": 1630},
+                    "上证50": {"最新价": 2922.97, "涨跌幅": 0, "振幅": 0, "成交额": 2404}
+                }
+                for name, vals in fallback.items():
+                    data["indices"][name] = vals
+                logging.info("✅ 从历史日线获取上证指数，其他指数使用预置参考值")
             else:
                 data["indices"] = get_fallback_indices()
-                logging.warning("⚠️ 使用预置指数数据")
-    except Exception as e:
-        logging.error(f"指数获取异常: {e}")
-        data["indices"] = get_fallback_indices()
+                logging.warning("⚠️ 所有指数数据源失败，使用完全预置数据")
+        except Exception as e2:
+            logging.error(f"历史日线降级失败: {e2}")
+            data["indices"] = get_fallback_indices()
 
     # ===== 2. 涨跌数据 =====
     try:
@@ -206,8 +227,7 @@ def fetch_market_data():
         data["sector_top5"] = [["传媒", 2.5], ["计算机", 2.1], ["通信", 1.8]]
         data["sector_bottom5"] = [["银行", -0.5], ["煤炭", -0.3], ["石油", -0.2]]
 
-    # ===== 4. 资金流向（直接使用预置，避免接口不稳定） =====
-    # 资金流向接口变化频繁，直接使用预置数据保证稳定
+    # ===== 4. 资金流向（直接使用预置） =====
     data["fund_in"] = [["电子", 30.7], ["计算机", 9.7], ["通信", 4.5]]
     data["fund_out"] = [["银行", -5.69], ["食品饮料", -3.2], ["非银金融", -2.8]]
     logging.info("✅ 使用预置资金流向数据")
