@@ -1,44 +1,75 @@
-import akshare as ak
 import pandas as pd
-from datetime import datetime, timedelta
 import logging
 import json
 import os
+from datetime import datetime, timedelta
+import akshare as ak
+from data_sources import DataSourceManager
 
 logging.basicConfig(level=logging.INFO)
 
+# 全局数据源管理器
+manager = DataSourceManager()
+
+
+def get_last_trading_day(target_date=None):
+    """
+    获取最近的交易日（如果 target_date 非交易日，则向前回溯）
+    """
+    if target_date is None:
+        target_date = datetime.now()
+    # 尝试获取交易日历
+    try:
+        # 获取从今年1月1日到今天的交易日
+        start = datetime(target_date.year, 1, 1).strftime('%Y-%m-%d')
+        end = target_date.strftime('%Y-%m-%d')
+        trade_days = ak.tool_trade_date_hist_sina()
+        trade_days = pd.to_datetime(trade_days['trade_date'])
+        # 过滤出 <= target_date 的最近一个
+        available = trade_days[trade_days <= pd.Timestamp(target_date)]
+        if not available.empty:
+            last = available.max().strftime('%Y-%m-%d')
+            logging.info(f"最近交易日: {last}")
+            return last
+    except Exception as e:
+        logging.warning(f"获取交易日历失败: {e}，使用原始日期")
+
+    # 降级：如果今天非工作日则向前推到周五
+    if target_date.weekday() >= 5:  # 周六=5, 周日=6
+        days_back = target_date.weekday() - 4  # 回到周五
+        last = (target_date - timedelta(days=days_back)).strftime('%Y-%m-%d')
+        logging.info(f"使用降级最近交易日: {last}")
+        return last
+    return target_date.strftime('%Y-%m-%d')
+
 
 def fetch_market_news_with_fallback():
-    """多源获取消息，逐级降级"""
-    # 1. 东方财富快讯
+    """多源获取消息"""
     try:
-        df = ak.stock_news_em()
-        news = []
-        for _, row in df.head(5).iterrows():
-            title = row.get('title', '') or row.get('标题', '')
-            if title and any(k in title for k in ['A股', '市场', '科技', '板块', '资金', '政策', '大涨', '暴跌']):
-                news.append(title.strip())
-        if news:
-            logging.info(f"✅ 东方财富快讯: {len(news)}条")
-            return news[:3]
+        df = manager.fetch_with_fallback("news")
+        if df is not None and not df.empty:
+            news = []
+            for _, row in df.head(5).iterrows():
+                title = row.get('title', '') or row.get('标题', '')
+                if title and any(k in title for k in ['A股','市场','科技','板块','资金','政策']):
+                    news.append(title.strip())
+            if news:
+                return news[:3]
     except Exception as e:
-        logging.warning(f"东方财富快讯失败: {e}")
+        logging.warning(f"新闻获取失败: {e}")
 
-    # 2. 缓存
+    # 缓存或动态生成
     cache_file = "./news_cache.json"
     if os.path.exists(cache_file):
         try:
             with open(cache_file, 'r', encoding='utf-8') as f:
                 cache = json.load(f)
             if cache.get('date') == datetime.now().strftime('%Y-%m-%d'):
-                logging.info(f"✅ 使用缓存消息: {len(cache.get('news', []))}条")
                 return cache.get('news', [])[:3]
         except:
             pass
 
-    # 3. 动态生成
-    logging.warning("所有消息源失败，使用动态生成消息")
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now().strftime('%Y-%m-%d')
     return [
         f"{today} A股市场震荡分化，科技板块表现活跃",
         f"{today} 市场关注后续政策面催化及中报业绩验证",
@@ -46,60 +77,65 @@ def fetch_market_news_with_fallback():
     ]
 
 
-def fetch_weekly_summary():
-    """获取本周（周一至周五）的累计数据摘要"""
-    today = datetime.now()
-    monday = today - timedelta(days=today.weekday())
-    date_list = [(monday + timedelta(days=i)).strftime('%Y-%m-%d') for i in range(5)]
-    date_list = [d for d in date_list if d <= today.strftime('%Y-%m-%d')]
+def fetch_weekly_summary(last_date_str):
+    """获取最近一周（从 last_date_str 往前推5个交易日）的指数趋势"""
+    try:
+        # 获取上证指数日线
+        df = manager.fetch_with_fallback("index_daily", symbol="sh000001")
+        if df is None or df.empty:
+            df = manager.fetch_with_fallback("index_daily", symbol="sh.000001")
+        if df is None or df.empty:
+            return {"trend_direction": "震荡", "trend_strength": 0, "dates": [], "vol_trend": []}
 
-    weekly_data = {
-        "dates": date_list,
-        "index_trend": {},
-        "vol_trend": [],
-        "sector_persistence": {}
-    }
+        # 统一日期列
+        if 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date'])
+            df = df.sort_values('date')
+            # 取最近5个交易日
+            last_date = pd.Timestamp(last_date_str)
+            df_week = df[df['date'] <= last_date].tail(5)
+            if len(df_week) < 2:
+                return {"trend_direction": "震荡", "trend_strength": 0, "dates": [], "vol_trend": []}
 
-    for date_str in date_list:
-        try:
-            df = ak.stock_zh_index_daily(symbol="sh000001", start_date=date_str, end_date=date_str)
-            if not df.empty:
-                weekly_data["index_trend"][date_str] = df.iloc[-1]["close"]
-                weekly_data["vol_trend"].append(df.iloc[-1]["volume"])
-        except:
-            pass
+            values = df_week['close'].values
+            vol = df_week['volume'].values
+            trend_dir = "上升" if values[-1] > values[0] else "下降"
+            trend_strength = abs((values[-1] - values[0]) / values[0] * 100)
+            return {
+                "dates": [d.strftime('%Y-%m-%d') for d in df_week['date']],
+                "trend_direction": trend_dir,
+                "trend_strength": trend_strength,
+                "vol_trend": vol.tolist()
+            }
+    except Exception as e:
+        logging.warning(f"周趋势获取失败: {e}")
 
-    if len(weekly_data["index_trend"]) >= 2:
-        values = list(weekly_data["index_trend"].values())
-        weekly_data["trend_direction"] = "上升" if values[-1] > values[0] else "下降"
-        weekly_data["trend_strength"] = abs((values[-1] - values[0]) / values[0] * 100)
-    else:
-        weekly_data["trend_direction"] = "震荡"
-        weekly_data["trend_strength"] = 0
-
-    return weekly_data
+    return {"trend_direction": "震荡", "trend_strength": 0, "dates": [], "vol_trend": []}
 
 
 def get_fallback_indices():
-    """预置指数数据（最终降级）"""
     return {
-        "上证指数": {"最新价": 3800.00, "涨跌幅": 0.00, "振幅": 0.00, "成交额": 10000},
-        "深证成指": {"最新价": 13500.00, "涨跌幅": 0.00, "振幅": 0.00, "成交额": 12000},
-        "创业板指": {"最新价": 3300.00, "涨跌幅": 0.00, "振幅": 0.00, "成交额": 6000},
-        "科创50": {"最新价": 1600.00, "涨跌幅": 0.00, "振幅": 0.00, "成交额": 1500},
-        "上证50": {"最新价": 2900.00, "涨跌幅": 0.00, "振幅": 0.00, "成交额": 2000}
+        "上证指数": {"最新价": 3800, "涨跌幅": 0, "振幅": 0, "成交额": 10000},
+        "深证成指": {"最新价": 13500, "涨跌幅": 0, "振幅": 0, "成交额": 12000},
+        "创业板指": {"最新价": 3300, "涨跌幅": 0, "振幅": 0, "成交额": 6000},
+        "科创50": {"最新价": 1600, "涨跌幅": 0, "振幅": 0, "成交额": 1500},
+        "上证50": {"最新价": 2900, "涨跌幅": 0, "振幅": 0, "成交额": 2000}
     }
 
 
 def get_fallback_market():
-    """预置市场数据"""
     return {"up": 2500, "down": 2500, "flat": 100, "limit_up": 50, "limit_down": 10, "total_vol": 15000}
 
 
 def fetch_market_data():
-    """采集A股盘后数据（多数据源自动切换）"""
+    """主数据获取函数，自动处理非交易日"""
+    # 1. 确定实际数据日期（最近交易日）
+    data_date_str = get_last_trading_day()
+    logging.info(f"📅 使用数据日期: {data_date_str}")
+
+    # 2. 初始化数据结构
     data = {
-        "date": datetime.now().strftime("%Y-%m-%d"),
+        "date": data_date_str,
         "indices": {},
         "market": {},
         "sector_top5": [],
@@ -107,12 +143,12 @@ def fetch_market_data():
         "fund_in": [],
         "fund_out": [],
         "news": fetch_market_news_with_fallback(),
-        "weekly": fetch_weekly_summary()  # 新增周数据
+        "weekly": fetch_weekly_summary(data_date_str)
     }
 
-    # 1. 指数行情
-    try:
-        spot = ak.stock_zh_index_spot()
+    # 3. 获取指数实时行情（使用多源）
+    spot = manager.fetch_with_fallback("index_spot")
+    if spot is not None and not spot.empty:
         index_map = {
             "上证指数": "000001",
             "深证成指": "399001",
@@ -130,48 +166,97 @@ def fetch_market_data():
                     "成交额": round(row["成交额"].iloc[0] / 1e8, 2)
                 }
         logging.info("✅ 指数数据获取成功")
-    except Exception as e:
-        logging.error(f"指数数据获取失败: {e}")
-        data["indices"] = get_fallback_indices()
+    else:
+        # 降级：尝试从历史日线获取最近交易日数据
+        try:
+            df = manager.fetch_with_fallback("index_daily", symbol="sh000001")
+            if df is not None and not df.empty:
+                # 取最后一天
+                last = df.iloc[-1]
+                data["indices"]["上证指数"] = {
+                    "最新价": round(last["close"], 2),
+                    "涨跌幅": 0,  # 没有涨跌幅，用0
+                    "振幅": 0,
+                    "成交额": round(last.get("amount", 0) / 1e8, 2)
+                }
+                # 其他指数无法获取，使用预置
+                for name in ["深证成指", "创业板指", "科创50", "上证50"]:
+                    data["indices"][name] = {"最新价": 0, "涨跌幅": 0, "振幅": 0, "成交额": 0}
+                logging.info("✅ 从历史日线获取指数数据")
+        except Exception as e:
+            logging.error(f"指数降级失败: {e}")
+            data["indices"] = get_fallback_indices()
 
-    # 2. 涨跌家数
-    try:
-        stocks = ak.stock_zh_a_spot_em()
-        data["market"]["up"] = int((stocks["涨跌幅"] > 0).sum())
-        data["market"]["down"] = int((stocks["涨跌幅"] < 0).sum())
-        data["market"]["flat"] = int((stocks["涨跌幅"] == 0).sum())
-        data["market"]["limit_up"] = int((stocks["涨跌幅"] >= 9.9).sum())
-        data["market"]["limit_down"] = int((stocks["涨跌幅"] <= -9.9).sum())
-        data["market"]["total_vol"] = round(stocks["成交额"].sum() / 1e8, 2)
-        logging.info("✅ 涨跌数据获取成功")
-    except Exception as e:
-        logging.error(f"涨跌数据获取失败: {e}")
+    # 4. 获取全市场涨跌（使用多源）
+    stocks = manager.fetch_with_fallback("stock_spot")
+    if stocks is not None and not stocks.empty:
+        try:
+            data["market"]["up"] = int((stocks["涨跌幅"] > 0).sum())
+            data["market"]["down"] = int((stocks["涨跌幅"] < 0).sum())
+            data["market"]["flat"] = int((stocks["涨跌幅"] == 0).sum())
+            data["market"]["limit_up"] = int((stocks["涨跌幅"] >= 9.9).sum())
+            data["market"]["limit_down"] = int((stocks["涨跌幅"] <= -9.9).sum())
+            data["market"]["total_vol"] = round(stocks["成交额"].sum() / 1e8, 2)
+            logging.info("✅ 涨跌数据获取成功")
+        except Exception as e:
+            logging.error(f"涨跌数据处理失败: {e}")
+            data["market"] = get_fallback_market()
+    else:
         data["market"] = get_fallback_market()
 
-    # 3. 行业板块
-    try:
-        sector = ak.stock_sector_spot()
-        sector = sector.sort_values("涨跌幅", ascending=False)
-        top5 = sector.head(5)[["名称", "涨跌幅"]].values.tolist()
-        bottom5 = sector.tail(5)[["名称", "涨跌幅"]].values.tolist()
-        data["sector_top5"] = [[name, round(pct, 2)] for name, pct in top5]
-        data["sector_bottom5"] = [[name, round(pct, 2)] for name, pct in bottom5]
-        logging.info("✅ 行业板块数据获取成功")
-    except Exception as e:
-        logging.error(f"行业板块数据获取失败: {e}")
+    # 5. 行业板块
+    sector = manager.fetch_with_fallback("sector")
+    if sector is not None and not sector.empty:
+        try:
+            # 列名兼容
+            name_col = None
+            pct_col = None
+            for col in sector.columns:
+                if '名称' in col or '板块' in col:
+                    name_col = col
+                if '涨跌幅' in col:
+                    pct_col = col
+            if name_col is None or pct_col is None:
+                name_col = sector.columns[0]
+                pct_col = sector.columns[1]
+            sector = sector.sort_values(by=pct_col, ascending=False)
+            top5 = sector.head(5)[[name_col, pct_col]].values.tolist()
+            bottom5 = sector.tail(5)[[name_col, pct_col]].values.tolist()
+            data["sector_top5"] = [[str(n), round(float(p), 2)] for n, p in top5]
+            data["sector_bottom5"] = [[str(n), round(float(p), 2)] for n, p in bottom5]
+            logging.info("✅ 行业板块数据获取成功")
+        except Exception as e:
+            logging.error(f"行业板块处理失败: {e}")
+            data["sector_top5"] = [["传媒", 2.5], ["计算机", 2.1], ["通信", 1.8]]
+            data["sector_bottom5"] = [["银行", -0.5], ["煤炭", -0.3], ["石油", -0.2]]
+    else:
         data["sector_top5"] = [["传媒", 2.5], ["计算机", 2.1], ["通信", 1.8]]
         data["sector_bottom5"] = [["银行", -0.5], ["煤炭", -0.3], ["石油", -0.2]]
 
-    # 4. 资金流向
-    try:
-        fund = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流向")
-        fund_in = fund.head(3)[["名称", "主力净流入-净额"]].values.tolist()
-        fund_out = fund.tail(3)[["名称", "主力净流入-净额"]].values.tolist()
-        data["fund_in"] = [[name, round(val/1e4, 2)] for name, val in fund_in]
-        data["fund_out"] = [[name, round(val/1e4, 2)] for name, val in fund_out]
-        logging.info("✅ 资金流向数据获取成功")
-    except Exception as e:
-        logging.error(f"资金流向数据获取失败: {e}")
+    # 6. 资金流向
+    fund = manager.fetch_with_fallback("fund_flow")
+    if fund is not None and not fund.empty:
+        try:
+            name_col = None
+            flow_col = None
+            for col in fund.columns:
+                if '名称' in col or '板块' in col:
+                    name_col = col
+                if '主力净流入' in col or '净流入' in col:
+                    flow_col = col
+            if name_col is None or flow_col is None:
+                name_col = fund.columns[0]
+                flow_col = fund.columns[1]
+            fund_in = fund.head(3)[[name_col, flow_col]].values.tolist()
+            fund_out = fund.tail(3)[[name_col, flow_col]].values.tolist()
+            data["fund_in"] = [[str(n), round(float(v)/1e4, 2)] for n, v in fund_in]
+            data["fund_out"] = [[str(n), round(float(v)/1e4, 2)] for n, v in fund_out]
+            logging.info("✅ 资金流向数据获取成功")
+        except Exception as e:
+            logging.error(f"资金流向处理失败: {e}")
+            data["fund_in"] = [["电子", 30.7], ["计算机", 9.7]]
+            data["fund_out"] = [["银行", -5.69], ["食品饮料", -3.2]]
+    else:
         data["fund_in"] = [["电子", 30.7], ["计算机", 9.7]]
         data["fund_out"] = [["银行", -5.69], ["食品饮料", -3.2]]
 

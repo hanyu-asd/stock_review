@@ -18,11 +18,11 @@ def main():
     logging.info("🚀 开始执行盘后复盘自动化任务")
 
     try:
-        # 1. 采集数据（含周趋势）
+        # 1. 采集数据（自动使用最近交易日）
         logging.info("📊 步骤1: 采集市场数据...")
         data = fetch_market_data()
 
-        # 2. AI分析（基于当日+周数据）
+        # 2. AI分析
         logging.info("🤖 步骤2: AI生成明日展望...")
         ai_result = call_ai_analysis(data)
         if ai_result:
