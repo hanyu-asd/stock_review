@@ -3,3 +3,5 @@ pandas>=2.0.0
 requests>=2.28.0
 Jinja2>=3.1.0
 baostock>=0.8.8
+easy-tdx>=0.1.0
+tickflow>=0.1.0
