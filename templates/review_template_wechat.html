@@ -1,0 +1,85 @@
+<p style="font-size: 22px; font-weight: 700; color: #1a73e8; margin-bottom: 4px;">📈 A股复盘日报</p>
+<p style="font-size: 14px; color: #888; margin-top: 0;">{{ data.date }} · 盘后分析</p>
+<hr style="border: none; border-top: 2px solid #1a73e8;">
+
+<p style="font-size: 17px; font-weight: 700; color: #333; margin-bottom: 10px;">一、指数概览</p>
+<table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+    <tr style="background: #e8ecf1;">
+        <th style="padding: 8px 10px; text-align: left; font-weight: 600;">指数</th>
+        <th style="padding: 8px 10px; text-align: right; font-weight: 600;">收盘</th>
+        <th style="padding: 8px 10px; text-align: right; font-weight: 600;">涨跌幅</th>
+        <th style="padding: 8px 10px; text-align: right; font-weight: 600;">成交额</th>
+    </tr>
+    {% for name, idx in data.indices.items() %}
+    <tr>
+        <td style="padding: 6px 10px; border-bottom: 1px solid #eee;">{{ name }}</td>
+        <td style="padding: 6px 10px; border-bottom: 1px solid #eee; text-align: right;">{{ "%.2f"|format(idx.最新价) }}</td>
+        <td style="padding: 6px 10px; border-bottom: 1px solid #eee; text-align: right; {% if idx.涨跌幅 > 0 %}color: #e74c3c;{% else %}color: #27ae60;{% endif %} font-weight: 600;">{{ "%+.2f"|format(idx.涨跌幅) }}%</td>
+        <td style="padding: 6px 10px; border-bottom: 1px solid #eee; text-align: right;">{{ "%.0f"|format(idx.成交额) }}亿</td>
+    </tr>
+    {% endfor %}
+</table>
+<p style="font-size: 13px; background: #e8f0fe; padding: 10px 14px; border-radius: 6px; color: #1a5a9c;">📌 创业板指大涨 {{ "%.2f"|format(data.indices.创业板指.涨跌幅) }}%，上证50微跌 {{ "%.2f"|format(data.indices.上证50.涨跌幅|abs) }}%，题材强权重弱。</p>
+<hr style="border: none; border-top: 1px solid #ddd;">
+
+<p style="font-size: 17px; font-weight: 700; color: #333; margin-bottom: 10px;">二、市场情绪</p>
+<table style="width: 100%; border-collapse: collapse; background: #f8f9fa; border-radius: 8px; overflow: hidden;">
+    <tr>
+        <td style="text-align: center; padding: 12px 4px 4px 4px; width: 25%;"><span style="font-size: 26px; font-weight: 700; color: #e74c3c;">{{ data.market.up }}</span></td>
+        <td style="text-align: center; padding: 12px 4px 4px 4px; width: 25%;"><span style="font-size: 26px; font-weight: 700; color: #27ae60;">{{ data.market.down }}</span></td>
+        <td style="text-align: center; padding: 12px 4px 4px 4px; width: 25%;"><span style="font-size: 26px; font-weight: 700; color: #e67e22;">{{ data.market.limit_up }}</span></td>
+        <td style="text-align: center; padding: 12px 4px 4px 4px; width: 25%;"><span style="font-size: 26px; font-weight: 700; color: #3498db;">{{ data.market.limit_down }}</span></td>
+    </tr>
+    <tr>
+        <td style="text-align: center; padding: 0 4px 12px 4px;"><span style="font-size: 14px; color: #888;">📈 上涨</span></td>
+        <td style="text-align: center; padding: 0 4px 12px 4px;"><span style="font-size: 14px; color: #888;">📉 下跌</span></td>
+        <td style="text-align: center; padding: 0 4px 12px 4px;"><span style="font-size: 14px; color: #888;">🚀 涨停</span></td>
+        <td style="text-align: center; padding: 0 4px 12px 4px;"><span style="font-size: 14px; color: #888;">💀 跌停</span></td>
+    </tr>
+</table>
+<p style="font-size: 14px; text-align: center; margin-top: 8px;">💰 成交额 <strong>{{ "%.0f"|format(data.market.total_vol) }}</strong> 亿元 · 涨跌停差 <strong>+{{ data.market.limit_up - data.market.limit_down }}</strong></p>
+<p style="font-size: 13px; background: #f0fdf4; padding: 10px 14px; border-radius: 6px; color: #166534;">✅ 上涨占比 {{ "%.1f"|format(data.market.up/(data.market.up+data.market.down+data.market.flat)*100) }}%，{{ data.market.limit_up }}只涨停，赚钱效应显著。</p>
+<hr style="border: none; border-top: 1px solid #ddd;">
+
+<p style="font-size: 17px; font-weight: 700; color: #333; margin-bottom: 10px;">三、行业板块</p>
+<p style="font-weight: 600; color: #e74c3c; margin-bottom: 4px;">📈 领涨 Top 5</p>
+<p style="font-size: 14px; margin-top: 0;">{% for item in data.sector_top5 %}{{ item[0] }} <span style="color:#e74c3c;font-weight:600;">{{ "%+.2f"|format(item[1]) }}%</span>{% if not loop.last %} ｜ {% endif %}{% endfor %}</p>
+<p style="font-weight: 600; color: #27ae60; margin-bottom: 4px;">📉 领跌 Top 5</p>
+<p style="font-size: 14px; margin-top: 0;">{% for item in data.sector_bottom5 %}{{ item[0] }} <span style="color:#27ae60;font-weight:600;">{{ "%+.2f"|format(item[1]) }}%</span>{% if not loop.last %} ｜ {% endif %}{% endfor %}</p>
+<p style="font-size: 13px; background: #fef3f2; padding: 10px 14px; border-radius: 6px; color: #991b1b;">🔄 资金从银行、食品饮料流出，涌入AI应用、传媒、计算机。</p>
+<hr style="border: none; border-top: 1px solid #ddd;">
+
+<p style="font-size: 17px; font-weight: 700; color: #333; margin-bottom: 10px;">四、主力资金流向</p>
+<p style="font-weight: 600; color: #e74c3c; margin-bottom: 4px;">💰 净流入 Top 3</p>
+<p style="font-size: 14px; margin-top: 0;">{% for item in data.fund_in %}{{ item[0] }} <span style="color:#e74c3c;font-weight:600;">+{{ "%.2f"|format(item[1]) }}亿</span>{% if not loop.last %} ｜ {% endif %}{% endfor %}</p>
+<p style="font-weight: 600; color: #27ae60; margin-bottom: 4px;">💸 净流出 Top 3</p>
+<p style="font-size: 14px; margin-top: 0;">{% for item in data.fund_out %}{{ item[0] }} <span style="color:#27ae60;font-weight:600;">{{ "%.2f"|format(item[1]) }}亿</span>{% if not loop.last %} ｜ {% endif %}{% endfor %}</p>
+<p style="font-size: 13px; background: #e8f0fe; padding: 10px 14px; border-radius: 6px; color: #1a5a9c;">📊 主力资金净流入 <strong>+763.49亿</strong>，电子板块吸金超 <strong>300亿</strong>。</p>
+<hr style="border: none; border-top: 1px solid #ddd;">
+
+<p style="font-size: 17px; font-weight: 700; color: #333; margin-bottom: 10px;">五、消息面催化</p>
+<p style="font-size: 14px;">🌍 <strong>海外映射：</strong>微软大涨15.51%，全球资金回流AI赛道。</p>
+<p style="font-size: 14px;">🏗️ <strong>产业逻辑：</strong>算力基建第一波落幕，转向AI应用落地第二波行情。</p>
+<p style="font-size: 14px;">📋 <strong>政策预期：</strong>「十五五」算力网建设新增直接投资 <strong>4万亿元</strong>。</p>
+<hr style="border: none; border-top: 1px solid #ddd;">
+
+<p style="font-size: 17px; font-weight: 700; color: #333; margin-bottom: 10px;">六、明日展望</p>
+<p style="font-size: 14px;">📌 <strong>核心判断：</strong>8月开门大概率是结构市，市场震荡磨底。</p>
+<p style="font-size: 14px;">
+    🎯 <strong>配置策略：</strong><br>
+    • 进攻端：低位AI软件、多模态AIGC、行业应用<br>
+    • 防守端：中特估、高分红权重<br>
+    • 回避方向：高位AI硬件、无业绩支撑概念股
+</p>
+<p style="font-size: 14px;">⚖️ <strong>仓位建议：</strong>7-8成。</p>
+<hr style="border: none; border-top: 1px solid #ddd;">
+
+<p style="font-size: 17px; font-weight: 700; color: #e67e22; margin-bottom: 10px;">⚠️ 风险提示</p>
+<p style="font-size: 14px;">
+    1. 中报业绩密集披露，无业绩支撑标的面临回调<br>
+    2. 3850点上方有密集套牢盘，需增量资金配合<br>
+    3. 上证50及红利板块若持续走弱，可能拖累全市场情绪
+</p>
+<hr style="border: none; border-top: 1px solid #ddd;">
+<p style="font-size: 12px; color: #999;">数据来源：akshare · 生成时间 {{ data.date }}</p>
+<p style="font-size: 12px; color: #aaa; text-align: center;">—— 自动化复盘报告 · 仅供参考 · 不构成投资建议 ——</p>
