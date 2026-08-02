@@ -13,6 +13,38 @@ logging.basicConfig(level=logging.INFO)
 
 manager = DataSourceManager()
 
+# ---------- 全局缓存 ----------
+CACHE_FILE = "./data_cache.json"
+CACHE_EXPIRE_HOURS = 24
+
+
+def load_cache():
+    """加载缓存数据"""
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+            # 检查缓存是否过期
+            cache_time = datetime.fromisoformat(cache.get('_timestamp', '2000-01-01'))
+            if (datetime.now() - cache_time).total_seconds() < CACHE_EXPIRE_HOURS * 3600:
+                return cache.get('data', {})
+        except:
+            pass
+    return {}
+
+
+def save_cache(data):
+    """保存缓存数据"""
+    try:
+        cache = {
+            '_timestamp': datetime.now().isoformat(),
+            'data': data
+        }
+        with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(cache, f, ensure_ascii=False, indent=2)
+    except:
+        pass
+
 
 def get_last_trading_day(target_date=None):
     if target_date is None:
@@ -39,14 +71,8 @@ def get_last_trading_day(target_date=None):
 
 def fetch_market_news_with_fallback():
     """
-    7层备用数据源，逐级降级
-    第1层: levistock（SDK封装，最稳定）
-    第2层: 新浪财经API
-    第3层: RSSHub财联社
-    第4层: 腾讯财经API
-    第5层: 东方财富网
-    第6层: 华尔街见闻RSS
-    第7层: 基于当日指数数据动态生成
+    7层备用数据源，全部为真实新闻源
+    全部失败时返回空列表，不使用估算
     """
     # 第1层：levistock
     try:
@@ -140,42 +166,15 @@ def fetch_market_news_with_fallback():
     except Exception as e:
         logging.warning(f"华尔街见闻失败: {e}")
 
-    # 第7层：动态生成
-    logging.warning("所有新闻源失败，将使用动态生成")
-    return None
-
-
-def generate_dynamic_news_from_indices(indices):
-    """基于指数数据动态生成消息"""
-    if not indices:
-        return ["今日A股市场震荡整理，关注结构性机会", "市场量能变化是短期关键观察指标"]
-    
-    sh = indices.get('上证指数', {})
-    cy = indices.get('创业板指', {})
-    sh_pct = sh.get('涨跌幅', 0)
-    cy_pct = cy.get('涨跌幅', 0)
-    
-    news = []
-    today = datetime.now().strftime('%Y-%m-%d')
-    
-    if sh_pct > 1.5 and cy_pct > 2:
-        news.append(f"{today} A股放量上涨，创业板大涨{cy_pct:.2f}%，科技板块领涨市场")
-    elif sh_pct > 1:
-        news.append(f"{today} A股震荡上行，上证指数收涨{sh_pct:.2f}%，市场情绪回暖")
-    elif sh_pct < -1.5 and cy_pct < -2:
-        news.append(f"{today} A股承压调整，创业板下跌{abs(cy_pct):.2f}%，防御板块相对抗跌")
-    elif sh_pct < -1:
-        news.append(f"{today} A股震荡整理，上证指数下跌{abs(sh_pct):.2f}%，关注权重股企稳信号")
-    else:
-        news.append(f"{today} A股窄幅震荡，市场等待方向选择")
-    
-    news.append("市场聚焦科技主线与政策催化方向")
-    return news[:3]
+    # 全部失败：返回空列表（不使用估算）
+    logging.warning("所有新闻源均失败，消息面将显示为「暂无可显示消息」")
+    return []
 
 
 # ========== 周趋势 ==========
 
 def fetch_weekly_summary(last_date_str):
+    """从真实历史数据获取周趋势"""
     try:
         df = manager.fetch_with_fallback("index_daily", symbol="sh000001")
         if df is None or df.empty:
@@ -201,198 +200,8 @@ def fetch_weekly_summary(last_date_str):
     except Exception as e:
         logging.warning(f"周趋势获取失败: {e}")
 
-    return {"trend_direction": "震荡", "trend_strength": 0, "dates": [], "vol_trend": [], "index_trend": {}}
-
-
-# ========== 动态获取指数默认值（基于历史日线） ==========
-
-def get_dynamic_fallback_indices():
-    """
-    从历史日线动态获取最近一个交易日的指数数据，作为最终降级
-    """
-    fallback = {}
-    index_codes = {
-        "上证指数": "sh000001",
-        "深证成指": "sz399001",
-        "创业板指": "sz399006",
-        "科创50": "sh000688",
-        "上证50": "sh000016"
-    }
-    for name, symbol in index_codes.items():
-        try:
-            df = manager.fetch_with_fallback("index_daily", symbol=symbol)
-            if df is not None and not df.empty:
-                df['date'] = pd.to_datetime(df['date'])
-                df = df.sort_values('date')
-                last = df.iloc[-1]
-                fallback[name] = {
-                    "最新价": round(float(last["close"]), 2),
-                    "涨跌幅": 0,
-                    "振幅": 0,
-                    "成交额": round(float(last.get("amount", 0)) / 1e8, 2)
-                }
-            else:
-                # 如果单个获取失败，使用简单推断
-                if name == "上证指数":
-                    fallback[name] = {"最新价": 3800, "涨跌幅": 0, "振幅": 0, "成交额": 10000}
-                elif name == "深证成指":
-                    fallback[name] = {"最新价": 13500, "涨跌幅": 0, "振幅": 0, "成交额": 12000}
-                elif name == "创业板指":
-                    fallback[name] = {"最新价": 3300, "涨跌幅": 0, "振幅": 0, "成交额": 6000}
-                elif name == "科创50":
-                    fallback[name] = {"最新价": 1600, "涨跌幅": 0, "振幅": 0, "成交额": 1500}
-                elif name == "上证50":
-                    fallback[name] = {"最新价": 2900, "涨跌幅": 0, "振幅": 0, "成交额": 2000}
-        except Exception as e:
-            logging.warning(f"获取 {name} 历史日线失败: {e}")
-            # 使用简单推断值
-            if name == "上证指数":
-                fallback[name] = {"最新价": 3800, "涨跌幅": 0, "振幅": 0, "成交额": 10000}
-            elif name == "深证成指":
-                fallback[name] = {"最新价": 13500, "涨跌幅": 0, "振幅": 0, "成交额": 12000}
-            elif name == "创业板指":
-                fallback[name] = {"最新价": 3300, "涨跌幅": 0, "振幅": 0, "成交额": 6000}
-            elif name == "科创50":
-                fallback[name] = {"最新价": 1600, "涨跌幅": 0, "振幅": 0, "成交额": 1500}
-            elif name == "上证50":
-                fallback[name] = {"最新价": 2900, "涨跌幅": 0, "振幅": 0, "成交额": 2000}
-    return fallback
-
-
-# ========== 动态估算（仅作为极端降级） ==========
-
-def calculate_market_stats_from_indices(indices):
-    """
-    根据指数数据估算涨跌家数（仅在准确数据源全部失败时使用）
-    """
-    if not indices:
-        logging.warning("无指数数据，使用默认涨跌估算")
-        return {"up": 2500, "down": 2300, "flat": 200, "limit_up": 50, "limit_down": 10, "total_vol": 15000}
-    
-    sh = indices.get('上证指数', {})
-    cy = indices.get('创业板指', {})
-    sh_pct = sh.get('涨跌幅', 0)
-    cy_pct = cy.get('涨跌幅', 0)
-    
-    avg_pct = (sh_pct + cy_pct) / 2
-    if avg_pct > 1.5:
-        up_ratio = 0.78
-    elif avg_pct > 0.5:
-        up_ratio = 0.62
-    elif avg_pct > -0.5:
-        up_ratio = 0.48
-    elif avg_pct > -1.5:
-        up_ratio = 0.32
-    else:
-        up_ratio = 0.18
-    
-    total = 5000
-    up = int(total * up_ratio)
-    down = int(total * (1 - up_ratio - 0.02))
-    flat = total - up - down
-    limit_up = int(up * 0.025) if up > 0 else 30
-    limit_down = int(down * 0.015) if down > 0 else 10
-    
-    return {
-        "up": up,
-        "down": down,
-        "flat": flat,
-        "limit_up": limit_up,
-        "limit_down": limit_down,
-        "total_vol": 0
-    }
-
-
-def generate_estimated_sectors(indices):
-    """基于指数表现动态生成板块列表（仅在无板块数据时使用）"""
-    sh = indices.get('上证指数', {})
-    cy = indices.get('创业板指', {})
-    sh_pct = sh.get('涨跌幅', 0)
-    cy_pct = cy.get('涨跌幅', 0)
-    avg_pct = (sh_pct + cy_pct) / 2
-    
-    if avg_pct > 0.8:
-        top = [
-            ["科技", round(avg_pct + 0.5, 2)],
-            ["电子", round(avg_pct + 0.3, 2)],
-            ["通信", round(avg_pct + 0.1, 2)],
-            ["传媒", round(avg_pct - 0.1, 2)],
-            ["汽车", round(avg_pct - 0.2, 2)]
-        ]
-        bottom = [
-            ["银行", round(-0.2, 2)],
-            ["煤炭", round(-0.1, 2)],
-            ["石油", round(0.0, 2)]
-        ]
-    elif avg_pct < -0.8:
-        top = [
-            ["银行", round(0.2, 2)],
-            ["食品饮料", round(0.1, 2)],
-            ["非银金融", round(0.0, 2)]
-        ]
-        bottom = [
-            ["科技", round(avg_pct - 0.5, 2)],
-            ["电子", round(avg_pct - 0.3, 2)],
-            ["通信", round(avg_pct - 0.1, 2)]
-        ]
-    else:
-        top = [
-            ["科技", round(avg_pct + 0.3, 2)],
-            ["电子", round(avg_pct + 0.1, 2)],
-            ["通信", round(avg_pct, 2)]
-        ]
-        bottom = [
-            ["银行", round(-0.1, 2)],
-            ["煤炭", round(0.0, 2)],
-            ["石油", round(-0.1, 2)]
-        ]
-    
-    while len(top) < 5:
-        top.append([f"其他{len(top)+1}", round(avg_pct - 0.1*len(top), 2)])
-    while len(bottom) < 5:
-        bottom.append([f"其他{len(bottom)+1}", round(-avg_pct + 0.1*len(bottom), 2)])
-    
-    return top[:5], bottom[:5]
-
-
-def calculate_fund_flow_from_sectors(sector_top5, sector_bottom5, indices):
-    """根据板块数据估算资金流向（仅在无准确数据时使用）"""
-    fund_in = []
-    fund_out = []
-    
-    if sector_top5 and sector_bottom5:
-        for name, pct in sector_top5[:3]:
-            if pct > 0:
-                inflow = round(abs(pct) * 50, 1)
-                fund_in.append([name, inflow])
-        for name, pct in sector_bottom5[:3]:
-            if pct < 0:
-                outflow = round(abs(pct) * 35, 1)
-                fund_out.append([name, -outflow])
-    
-    if not fund_in and not fund_out:
-        sh = indices.get('上证指数', {})
-        cy = indices.get('创业板指', {})
-        sh_pct = sh.get('涨跌幅', 0)
-        cy_pct = cy.get('涨跌幅', 0)
-        avg_pct = (sh_pct + cy_pct) / 2
-        
-        if avg_pct > 0.5:
-            fund_in = [["科技", round(avg_pct * 30, 1)], ["电子", round(avg_pct * 20, 1)], ["通信", round(avg_pct * 15, 1)]]
-            fund_out = [["银行", -round(abs(avg_pct) * 5, 1)], ["食品饮料", -round(abs(avg_pct) * 3, 1)]]
-        elif avg_pct < -0.5:
-            fund_in = [["银行", round(abs(avg_pct) * 5, 1)], ["食品饮料", round(abs(avg_pct) * 3, 1)]]
-            fund_out = [["科技", -round(abs(avg_pct) * 25, 1)], ["电子", -round(abs(avg_pct) * 18, 1)]]
-        else:
-            fund_in = [["科技", 15.0], ["电子", 10.0], ["通信", 8.0]]
-            fund_out = [["银行", -5.0], ["食品饮料", -3.0], ["非银金融", -2.0]]
-    
-    while len(fund_in) < 3:
-        fund_in.append([f"板块{len(fund_in)+1}", 5.0])
-    while len(fund_out) < 3:
-        fund_out.append([f"板块{len(fund_out)+1}", -2.0])
-    
-    return fund_in[:3], fund_out[:3]
+    # 返回空数据（不使用估算）
+    return {"trend_direction": "未知", "trend_strength": None, "dates": [], "vol_trend": [], "index_trend": {}}
 
 
 # ========== 主数据获取函数 ==========
@@ -414,6 +223,8 @@ def fetch_market_data():
     }
 
     # ===== 1. 指数数据 =====
+    # 优先实时接口，失败则历史日线，再失败则使用缓存
+    indices_success = False
     try:
         spot = manager.fetch_with_fallback("index_spot")
         if spot is not None and not spot.empty:
@@ -454,13 +265,13 @@ def fetch_market_data():
                         "成交额": round(float(r.get(cols['成交额'], 0)) / 1e8, 2)
                     }
             if data["indices"]:
+                indices_success = True
                 logging.info(f"✅ 指数实时数据成功，共 {len(data['indices'])} 条")
-            else:
-                raise Exception("实时数据未获取到任何指数")
-        else:
-            raise Exception("实时数据返回空")
     except Exception as e:
-        logging.warning(f"实时指数获取失败: {e}，尝试历史日线")
+        logging.warning(f"实时指数获取失败: {e}")
+
+    # 如果实时接口失败，尝试历史日线
+    if not indices_success:
         try:
             index_codes = {
                 "上证指数": "sh000001",
@@ -478,60 +289,65 @@ def fetch_market_data():
                         last = df.iloc[-1]
                         data["indices"][name] = {
                             "最新价": round(float(last["close"]), 2),
-                            "涨跌幅": 0,
-                            "振幅": 0,
+                            "涨跌幅": None,  # 历史日线无涨跌幅
+                            "振幅": None,
                             "成交额": round(float(last.get("amount", 0)) / 1e8, 2)
                         }
-                    else:
-                        raise Exception(f"{name} 历史日线为空")
                 except Exception as e2:
                     logging.warning(f"获取 {name} 历史日线失败: {e2}")
             if data["indices"]:
+                indices_success = True
                 logging.info(f"✅ 从历史日线获取指数数据，共 {len(data['indices'])} 条")
-            else:
-                raise Exception("所有历史日线获取失败")
         except Exception as e2:
             logging.error(f"历史日线降级完全失败: {e2}")
-            data["indices"] = get_dynamic_fallback_indices()
-            logging.warning("⚠️ 使用动态获取的默认指数数据")
 
-    # ===== 2. 获取消息面 =====
-    news = fetch_market_news_with_fallback()
-    if news:
-        data["news"] = news
-    else:
-        data["news"] = generate_dynamic_news_from_indices(data["indices"])
+    # 如果仍然失败，尝试从缓存加载
+    if not indices_success:
+        cache = load_cache()
+        if cache.get('indices'):
+            data["indices"] = cache['indices']
+            logging.info(f"✅ 从缓存加载指数数据，共 {len(data['indices'])} 条")
+        else:
+            # 实在无法获取，置为空（不使用硬编码估算值）
+            data["indices"] = {}
+            logging.error("❌ 所有指数数据源均失败，指数数据不可用")
 
-    # ===== 3. 涨跌数据（优先使用准确的聚合接口） =====
+    # ===== 2. 涨跌数据（使用 stock_market_activity_em 聚合接口） =====
+    market_success = False
     try:
         activity = manager.fetch_with_fallback("market_activity")
         if activity is not None and not activity.empty:
             row = activity.iloc[-1]
-            # 动态查找列名
             up_col = next((c for c in activity.columns if '上涨' in c or '涨家数' in c), None)
             down_col = next((c for c in activity.columns if '下跌' in c or '跌家数' in c), None)
             flat_col = next((c for c in activity.columns if '平盘' in c or '平家数' in c), None)
             limit_up_col = next((c for c in activity.columns if '涨停' in c), None)
             limit_down_col = next((c for c in activity.columns if '跌停' in c), None)
-            
+
             if up_col and down_col:
                 data["market"]["up"] = int(row[up_col])
                 data["market"]["down"] = int(row[down_col])
                 data["market"]["flat"] = int(row[flat_col]) if flat_col else 0
                 data["market"]["limit_up"] = int(row[limit_up_col]) if limit_up_col else 0
                 data["market"]["limit_down"] = int(row[limit_down_col]) if limit_down_col else 0
-                # 成交额从指数获取
+                # 成交额：从指数累加
                 total_vol = 0
                 for idx in data["indices"].values():
-                    total_vol += idx.get("成交额", 0)
-                data["market"]["total_vol"] = round(total_vol, 2)
+                    vol = idx.get("成交额")
+                    if vol is not None:
+                        total_vol += vol
+                data["market"]["total_vol"] = round(total_vol, 2) if total_vol > 0 else None
+                market_success = True
                 logging.info(f"✅ 市场情绪数据获取成功: 上涨{data['market']['up']}家，下跌{data['market']['down']}家")
             else:
-                raise Exception("列名未找到")
+                logging.warning("市场情绪接口返回数据但列名未匹配")
         else:
-            raise Exception("market_activity 返回空")
+            logging.warning("市场情绪接口返回空")
     except Exception as e:
-        logging.warning(f"市场情绪聚合数据获取失败: {e}，尝试全列表统计")
+        logging.warning(f"市场情绪聚合数据获取失败: {e}")
+
+    # 如果聚合接口失败，尝试全列表统计
+    if not market_success:
         try:
             stocks = manager.fetch_with_fallback("stock_spot")
             if stocks is not None and not stocks.empty:
@@ -541,15 +357,32 @@ def fetch_market_data():
                 data["market"]["limit_up"] = int((stocks["涨跌幅"] >= 9.9).sum())
                 data["market"]["limit_down"] = int((stocks["涨跌幅"] <= -9.9).sum())
                 data["market"]["total_vol"] = round(float(stocks["成交额"].sum()) / 1e8, 2)
+                market_success = True
                 logging.info("✅ 涨跌数据获取成功（全列表统计）")
             else:
-                raise Exception("stock_spot 返回空")
+                logging.warning("全列表统计返回空")
         except Exception as e2:
-            logging.error(f"所有涨跌数据源均失败: {e2}")
-            data["market"] = calculate_market_stats_from_indices(data["indices"])
-            logging.warning("⚠️ 使用估算涨跌数据（极端降级）")
+            logging.error(f"全列表统计失败: {e2}")
 
-    # ===== 4. 行业板块 =====
+    # 如果仍然失败，从缓存加载
+    if not market_success:
+        cache = load_cache()
+        if cache.get('market'):
+            data["market"] = cache['market']
+            logging.info("✅ 从缓存加载涨跌数据")
+        else:
+            data["market"] = {
+                "up": None,
+                "down": None,
+                "flat": None,
+                "limit_up": None,
+                "limit_down": None,
+                "total_vol": None
+            }
+            logging.error("❌ 所有涨跌数据源均失败，涨跌数据不可用")
+
+    # ===== 3. 行业板块 =====
+    sector_success = False
     try:
         sector = manager.fetch_with_fallback("sector")
         if sector is not None and not sector.empty:
@@ -560,19 +393,27 @@ def fetch_market_data():
             bottom5 = sector.tail(5)[[name_col, pct_col]].values.tolist()
             data["sector_top5"] = [[str(n), round(float(p), 2)] for n, p in top5]
             data["sector_bottom5"] = [[str(n), round(float(p), 2)] for n, p in bottom5]
+            sector_success = True
             logging.info("✅ 行业板块数据获取成功")
         else:
-            top, bottom = generate_estimated_sectors(data["indices"])
-            data["sector_top5"] = top
-            data["sector_bottom5"] = bottom
-            logging.warning("⚠️ 使用动态估算行业板块数据（极端降级）")
+            logging.warning("行业板块接口返回空")
     except Exception as e:
         logging.error(f"行业板块异常: {e}")
-        top, bottom = generate_estimated_sectors(data["indices"])
-        data["sector_top5"] = top
-        data["sector_bottom5"] = bottom
 
-    # ===== 5. 资金流向 =====
+    # 如果失败，从缓存加载
+    if not sector_success:
+        cache = load_cache()
+        if cache.get('sector_top5') and cache.get('sector_bottom5'):
+            data["sector_top5"] = cache['sector_top5']
+            data["sector_bottom5"] = cache['sector_bottom5']
+            logging.info("✅ 从缓存加载行业板块数据")
+        else:
+            data["sector_top5"] = []
+            data["sector_bottom5"] = []
+            logging.error("❌ 行业板块数据不可用")
+
+    # ===== 4. 资金流向 =====
+    fund_success = False
     try:
         fund = manager.fetch_with_fallback("fund_flow")
         if fund is not None and not fund.empty:
@@ -582,20 +423,41 @@ def fetch_market_data():
             fund_out = fund.tail(3)[[name_col, flow_col]].values.tolist()
             data["fund_in"] = [[str(n), round(float(v)/1e4, 2)] for n, v in fund_in]
             data["fund_out"] = [[str(n), round(float(v)/1e4, 2)] for n, v in fund_out]
+            fund_success = True
             logging.info("✅ 资金流向数据获取成功")
         else:
-            fund_in, fund_out = calculate_fund_flow_from_sectors(
-                data["sector_top5"], data["sector_bottom5"], data["indices"]
-            )
-            data["fund_in"] = fund_in
-            data["fund_out"] = fund_out
-            logging.warning("⚠️ 使用估算资金流向数据（极端降级）")
+            logging.warning("资金流向接口返回空")
     except Exception as e:
         logging.error(f"资金流向异常: {e}")
-        fund_in, fund_out = calculate_fund_flow_from_sectors(
-            data["sector_top5"], data["sector_bottom5"], data["indices"]
-        )
-        data["fund_in"] = fund_in
-        data["fund_out"] = fund_out
+
+    if not fund_success:
+        cache = load_cache()
+        if cache.get('fund_in') and cache.get('fund_out'):
+            data["fund_in"] = cache['fund_in']
+            data["fund_out"] = cache['fund_out']
+            logging.info("✅ 从缓存加载资金流向数据")
+        else:
+            data["fund_in"] = []
+            data["fund_out"] = []
+            logging.error("❌ 资金流向数据不可用")
+
+    # ===== 5. 消息面 =====
+    news = fetch_market_news_with_fallback()
+    data["news"] = news if news else []  # 空列表，不在模板中显示
+
+    # ===== 保存缓存（仅保存真实数据） =====
+    cache_data = {}
+    if data["indices"]:
+        cache_data['indices'] = data["indices"]
+    if data["market"] and any(v is not None for v in data["market"].values()):
+        cache_data['market'] = data["market"]
+    if data["sector_top5"]:
+        cache_data['sector_top5'] = data["sector_top5"]
+        cache_data['sector_bottom5'] = data["sector_bottom5"]
+    if data["fund_in"]:
+        cache_data['fund_in'] = data["fund_in"]
+        cache_data['fund_out'] = data["fund_out"]
+    if cache_data:
+        save_cache(cache_data)
 
     return data

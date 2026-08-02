@@ -11,31 +11,58 @@ def call_ai_analysis(data):
         logging.warning("⚠️ 未配置 MODELSCOPE_SDK_TOKEN，跳过AI分析")
         return None
 
+    # 检查数据完整性
+    if not data.get('indices'):
+        logging.warning("⚠️ 指数数据为空，无法进行AI分析")
+        return None
+
     try:
         sh = data['indices'].get('上证指数', {})
         cy = data['indices'].get('创业板指', {})
         kc = data['indices'].get('科创50', {})
         market = data.get('market', {})
-        sector_top = data.get('sector_top5', [["传媒", 2.5], ["计算机", 2.1], ["通信", 1.8]])
-        sector_bottom = data.get('sector_bottom5', [["银行", -0.5], ["煤炭", -0.3], ["石油", -0.2]])
-        fund_in = data.get('fund_in', [["电子", 30.7], ["计算机", 9.7]])
-        fund_out = data.get('fund_out', [["银行", -5.69], ["食品饮料", -3.2]])
+        sector_top = data.get('sector_top5', [])
+        sector_bottom = data.get('sector_bottom5', [])
+        fund_in = data.get('fund_in', [])
+        fund_out = data.get('fund_out', [])
 
+        # 只使用真实数据，不使用估算
+        sh_pct = sh.get('涨跌幅')
+        cy_pct = cy.get('涨跌幅')
+        kc_pct = kc.get('涨跌幅')
+
+        # 如果涨跌幅为 None，用 0 替代（但标记为未知）
+        sh_pct_display = sh_pct if sh_pct is not None else "数据暂不可用"
+        cy_pct_display = cy_pct if cy_pct is not None else "数据暂不可用"
+        kc_pct_display = kc_pct if kc_pct is not None else "数据暂不可用"
+
+        # 构建摘要（仅使用真实数据）
         daily_summary = f"""
-【今日指数】上证{sh.get('涨跌幅', 0):.2f}%，创业板{cy.get('涨跌幅', 0):.2f}%，科创50{kc.get('涨跌幅', 0):.2f}%。
-【涨跌分布】上涨{market.get('up', 0)}家，下跌{market.get('down', 0)}家，涨停{market.get('limit_up', 0)}家。
-【领涨板块】{', '.join([f'{s[0]}{s[1]:+.2f}%' for s in sector_top[:3]])}。
-【领跌板块】{', '.join([f'{s[0]}{s[1]:+.2f}%' for s in sector_bottom[:3]])}。
-【资金流向】电子净流入{fund_in[0][1] if fund_in else 0:.1f}亿，银行净流出{abs(fund_out[0][1]) if fund_out else 0:.1f}亿。
+【今日指数】上证{sh_pct_display}%，创业板{cy_pct_display}%，科创50{kc_pct_display}%。
 """
+
+        if market.get('up') is not None:
+            daily_summary += f"【涨跌分布】上涨{market.get('up', 0)}家，下跌{market.get('down', 0)}家，涨停{market.get('limit_up', 0)}家。\n"
+
+        if sector_top:
+            top_str = ', '.join([f'{s[0]}{s[1]:+.2f}%' for s in sector_top[:3]])
+            daily_summary += f"【领涨板块】{top_str}。\n"
+
+        if sector_bottom:
+            bottom_str = ', '.join([f'{s[0]}{s[1]:+.2f}%' for s in sector_bottom[:3]])
+            daily_summary += f"【领跌板块】{bottom_str}。\n"
+
+        if fund_in and fund_out:
+            daily_summary += f"【资金流向】{fund_in[0][0]}净流入{fund_in[0][1]:.1f}亿，{fund_out[0][0]}净流出{abs(fund_out[0][1]):.1f}亿。\n"
+
     except Exception as e:
         logging.warning(f"构建摘要失败: {e}")
         return None
 
     weekly = data.get('weekly', {})
-    weekly_summary = f"""
-【本周趋势】{weekly.get('trend_direction', '震荡')}，周振幅约{weekly.get('trend_strength', 0):.1f}%
-"""
+    weekly_summary = ""
+    if weekly.get('trend_direction') and weekly.get('trend_direction') != "未知":
+        weekly_summary = f"【本周趋势】{weekly.get('trend_direction', '')}，周振幅约{weekly.get('trend_strength', 0):.1f}%\n"
 
     news_summary = ""
     if data.get("news"):
@@ -49,7 +76,7 @@ def call_ai_analysis(data):
 {news_summary}
 
 要求：
-1. 结合一周趋势做判断，而非单日波动
+1. 基于真实数据做判断，不虚构数据
 2. 100字以内，分两段：核心判断 + 配置建议
 3. 只做事实归纳，不推荐个股，不预测具体点位
 4. 使用"需关注"、"若…则…"等条件句式
@@ -106,19 +133,65 @@ def call_ai_analysis(data):
 
 
 def generate_template_outlook(data):
+    """
+    AI不可用时的降级模板（仅使用真实数据，无静态占位）
+    如果数据不足，返回简短提示
+    """
+    sh = data.get('indices', {}).get('上证指数', {})
+    cy = data.get('indices', {}).get('创业板指', {})
+    sh_pct = sh.get('涨跌幅')
+    cy_pct = cy.get('涨跌幅')
+
     weekly = data.get('weekly', {})
-    direction = weekly.get('trend_direction', '震荡')
-    strength = weekly.get('trend_strength', 0)
+    direction = weekly.get('trend_direction')
 
-    if direction == "上升" and strength > 2:
-        trend = f"本周趋势向上（+{strength:.1f}%），短期偏强但需警惕获利回吐"
-    elif direction == "下降" and strength > 2:
-        trend = f"本周趋势向下（-{strength:.1f}%），关注权重股能否企稳"
+    # 构建核心判断
+    core_parts = []
+    if sh_pct is not None:
+        core_parts.append(f"上证{sh_pct:+.2f}%")
+    if cy_pct is not None:
+        core_parts.append(f"创业板{cy_pct:+.2f}%")
+
+    if core_parts:
+        core = f"今日{'，'.join(core_parts)}。"
     else:
-        trend = "市场震荡磨底，结构分化延续"
+        core = "今日指数数据暂不可用。"
 
-    top_sector = data.get('sector_top5', [["科技", 0]])[0][0] if data.get('sector_top5') else "科技"
+    # 添加周趋势
+    if direction and direction != "未知":
+        core += f" 本周趋势{direction}。"
+
+    # 构建配置建议
+    config = ""
+
+    # 使用真实板块数据
+    sector_top = data.get('sector_top5', [])
+    if sector_top:
+        top_names = [s[0] for s in sector_top[:2] if s and s[0]]
+        if top_names:
+            config = f"关注{'、'.join(top_names)}持续性和量能变化。"
+
+    # 如果板块数据为空，给出通用建议
+    if not config:
+        # 基于涨跌幅给出建议
+        if sh_pct is not None and cy_pct is not None:
+            avg_pct = (sh_pct + cy_pct) / 2
+            if avg_pct > 1:
+                config = "进攻端关注科技成长方向；防守端配置高股息板块。"
+            elif avg_pct < -1:
+                config = "进攻端谨慎；防守端关注高股息及防御性板块。"
+            else:
+                config = "进攻端关注结构性机会；防守端均衡配置。"
+        else:
+            config = "建议均衡配置，关注量能变化。"
+
+    # 确保非空
+    if not core:
+        core = "市场数据暂不完整，请参考具体数据自行判断。"
+    if not config:
+        config = "建议关注量能变化及市场情绪。"
+
     return {
-        'core': f"本周{trend}。量能变化是关键观察信号。",
-        'config': f"关注{top_sector}持续性和量能变化；防御配置高股息板块。"
+        'core': core,
+        'config': config
     }
