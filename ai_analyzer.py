@@ -11,7 +11,6 @@ def call_ai_analysis(data):
         logging.warning("⚠️ 未配置 MODELSCOPE_SDK_TOKEN，跳过AI分析")
         return None
 
-    # 检查数据完整性
     if not data.get('indices'):
         logging.warning("⚠️ 指数数据为空，无法进行AI分析")
         return None
@@ -26,23 +25,20 @@ def call_ai_analysis(data):
         fund_in = data.get('fund_in', [])
         fund_out = data.get('fund_out', [])
 
-        # 只使用真实数据，不使用估算
         sh_pct = sh.get('涨跌幅')
         cy_pct = cy.get('涨跌幅')
         kc_pct = kc.get('涨跌幅')
 
-        # 如果涨跌幅为 None，用 0 替代（但标记为未知）
-        sh_pct_display = sh_pct if sh_pct is not None else "数据暂不可用"
-        cy_pct_display = cy_pct if cy_pct is not None else "数据暂不可用"
-        kc_pct_display = kc_pct if kc_pct is not None else "数据暂不可用"
+        sh_pct_display = f"{sh_pct:+.2f}%" if sh_pct is not None else "数据暂不可用"
+        cy_pct_display = f"{cy_pct:+.2f}%" if cy_pct is not None else "数据暂不可用"
+        kc_pct_display = f"{kc_pct:+.2f}%" if kc_pct is not None else "数据暂不可用"
 
-        # 构建摘要（仅使用真实数据）
-        daily_summary = f"""
-【今日指数】上证{sh_pct_display}%，创业板{cy_pct_display}%，科创50{kc_pct_display}%。
-"""
+        daily_summary = f"【今日指数】上证{sh_pct_display}，创业板{cy_pct_display}，科创50{kc_pct_display}。\n"
 
-        if market.get('up') is not None:
-            daily_summary += f"【涨跌分布】上涨{market.get('up', 0)}家，下跌{market.get('down', 0)}家，涨停{market.get('limit_up', 0)}家。\n"
+        up = market.get('up')
+        down = market.get('down')
+        if up is not None and down is not None:
+            daily_summary += f"【涨跌分布】上涨{up}家，下跌{down}家。\n"
 
         if sector_top:
             top_str = ', '.join([f'{s[0]}{s[1]:+.2f}%' for s in sector_top[:3]])
@@ -62,7 +58,7 @@ def call_ai_analysis(data):
     weekly = data.get('weekly', {})
     weekly_summary = ""
     if weekly.get('trend_direction') and weekly.get('trend_direction') != "未知":
-        weekly_summary = f"【本周趋势】{weekly.get('trend_direction', '')}，周振幅约{weekly.get('trend_strength', 0):.1f}%\n"
+        weekly_summary = f"【本周趋势】{weekly.get('trend_direction')}，周振幅约{weekly.get('trend_strength', 0):.1f}%\n"
 
     news_summary = ""
     if data.get("news"):
@@ -123,7 +119,7 @@ def call_ai_analysis(data):
                     logging.info(f"✅ AI分析生成成功")
                     return result
         else:
-            logging.error(f"ModelScope API返回错误: {response.status_code}, {response.text[:200]}")
+            logging.error(f"ModelScope API返回错误: {response.status_code}")
             return None
     except Exception as e:
         logging.error(f"ModelScope API调用异常: {e}")
@@ -134,8 +130,7 @@ def call_ai_analysis(data):
 
 def generate_template_outlook(data):
     """
-    AI不可用时的降级模板（仅使用真实数据，无静态占位）
-    如果数据不足，返回简短提示
+    AI不可用时的降级模板，完全基于真实数据
     """
     sh = data.get('indices', {}).get('上证指数', {})
     cy = data.get('indices', {}).get('创业板指', {})
@@ -145,10 +140,10 @@ def generate_template_outlook(data):
     weekly = data.get('weekly', {})
     direction = weekly.get('trend_direction')
 
-    # 构建核心判断
+    # 核心判断：基于真实数据
     core_parts = []
     if sh_pct is not None:
-        core_parts.append(f"上证{sh_pct:+.2f}%")
+        core_parts.append(f"上证指数{sh_pct:+.2f}%")
     if cy_pct is not None:
         core_parts.append(f"创业板{cy_pct:+.2f}%")
 
@@ -157,39 +152,23 @@ def generate_template_outlook(data):
     else:
         core = "今日指数数据暂不可用。"
 
-    # 添加周趋势
     if direction and direction != "未知":
         core += f" 本周趋势{direction}。"
 
-    # 构建配置建议
-    config = ""
-
-    # 使用真实板块数据
+    # 配置建议：基于板块数据
     sector_top = data.get('sector_top5', [])
-    if sector_top:
+    if sector_top and len(sector_top) >= 2:
         top_names = [s[0] for s in sector_top[:2] if s and s[0]]
         if top_names:
             config = f"关注{'、'.join(top_names)}持续性和量能变化。"
-
-    # 如果板块数据为空，给出通用建议
-    if not config:
-        # 基于涨跌幅给出建议
-        if sh_pct is not None and cy_pct is not None:
-            avg_pct = (sh_pct + cy_pct) / 2
-            if avg_pct > 1:
-                config = "进攻端关注科技成长方向；防守端配置高股息板块。"
-            elif avg_pct < -1:
-                config = "进攻端谨慎；防守端关注高股息及防御性板块。"
-            else:
-                config = "进攻端关注结构性机会；防守端均衡配置。"
         else:
-            config = "建议均衡配置，关注量能变化。"
+            config = "关注市场结构性机会。"
+    else:
+        # 没有板块数据时，不输出具体建议，改为通用提示
+        config = "板块数据暂不可用，建议关注量能变化。"
 
-    # 确保非空
     if not core:
         core = "市场数据暂不完整，请参考具体数据自行判断。"
-    if not config:
-        config = "建议关注量能变化及市场情绪。"
 
     return {
         'core': core,

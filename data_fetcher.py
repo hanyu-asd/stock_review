@@ -24,7 +24,6 @@ def load_cache():
         try:
             with open(CACHE_FILE, 'r', encoding='utf-8') as f:
                 cache = json.load(f)
-            # 检查缓存是否过期
             cache_time = datetime.fromisoformat(cache.get('_timestamp', '2000-01-01'))
             if (datetime.now() - cache_time).total_seconds() < CACHE_EXPIRE_HOURS * 3600:
                 return cache.get('data', {})
@@ -70,10 +69,7 @@ def get_last_trading_day(target_date=None):
 # ========== 消息面催化：7层备用数据源 ==========
 
 def fetch_market_news_with_fallback():
-    """
-    7层备用数据源，全部为真实新闻源
-    全部失败时返回空列表，不使用估算
-    """
+    """7层备用数据源，全部为真实新闻源，全部失败时返回空列表"""
     # 第1层：levistock
     try:
         import levistock as lk
@@ -166,7 +162,7 @@ def fetch_market_news_with_fallback():
     except Exception as e:
         logging.warning(f"华尔街见闻失败: {e}")
 
-    # 全部失败：返回空列表（不使用估算）
+    # 全部失败：返回空列表
     logging.warning("所有新闻源均失败，消息面将显示为「暂无可显示消息」")
     return []
 
@@ -200,7 +196,6 @@ def fetch_weekly_summary(last_date_str):
     except Exception as e:
         logging.warning(f"周趋势获取失败: {e}")
 
-    # 返回空数据（不使用估算）
     return {"trend_direction": "未知", "trend_strength": None, "dates": [], "vol_trend": [], "index_trend": {}}
 
 
@@ -223,7 +218,6 @@ def fetch_market_data():
     }
 
     # ===== 1. 指数数据 =====
-    # 优先实时接口，失败则历史日线，再失败则使用缓存
     indices_success = False
     try:
         spot = manager.fetch_with_fallback("index_spot")
@@ -270,7 +264,6 @@ def fetch_market_data():
     except Exception as e:
         logging.warning(f"实时指数获取失败: {e}")
 
-    # 如果实时接口失败，尝试历史日线
     if not indices_success:
         try:
             index_codes = {
@@ -289,7 +282,7 @@ def fetch_market_data():
                         last = df.iloc[-1]
                         data["indices"][name] = {
                             "最新价": round(float(last["close"]), 2),
-                            "涨跌幅": None,  # 历史日线无涨跌幅
+                            "涨跌幅": None,
                             "振幅": None,
                             "成交额": round(float(last.get("amount", 0)) / 1e8, 2)
                         }
@@ -299,20 +292,18 @@ def fetch_market_data():
                 indices_success = True
                 logging.info(f"✅ 从历史日线获取指数数据，共 {len(data['indices'])} 条")
         except Exception as e2:
-            logging.error(f"历史日线降级完全失败: {e2}")
+            logging.error(f"历史日线降级失败: {e2}")
 
-    # 如果仍然失败，尝试从缓存加载
     if not indices_success:
         cache = load_cache()
         if cache.get('indices'):
             data["indices"] = cache['indices']
             logging.info(f"✅ 从缓存加载指数数据，共 {len(data['indices'])} 条")
         else:
-            # 实在无法获取，置为空（不使用硬编码估算值）
             data["indices"] = {}
             logging.error("❌ 所有指数数据源均失败，指数数据不可用")
 
-    # ===== 2. 涨跌数据（使用 stock_market_activity_em 聚合接口） =====
+    # ===== 2. 涨跌数据 =====
     market_success = False
     try:
         activity = manager.fetch_with_fallback("market_activity")
@@ -330,7 +321,6 @@ def fetch_market_data():
                 data["market"]["flat"] = int(row[flat_col]) if flat_col else 0
                 data["market"]["limit_up"] = int(row[limit_up_col]) if limit_up_col else 0
                 data["market"]["limit_down"] = int(row[limit_down_col]) if limit_down_col else 0
-                # 成交额：从指数累加
                 total_vol = 0
                 for idx in data["indices"].values():
                     vol = idx.get("成交额")
@@ -341,12 +331,9 @@ def fetch_market_data():
                 logging.info(f"✅ 市场情绪数据获取成功: 上涨{data['market']['up']}家，下跌{data['market']['down']}家")
             else:
                 logging.warning("市场情绪接口返回数据但列名未匹配")
-        else:
-            logging.warning("市场情绪接口返回空")
     except Exception as e:
         logging.warning(f"市场情绪聚合数据获取失败: {e}")
 
-    # 如果聚合接口失败，尝试全列表统计
     if not market_success:
         try:
             stocks = manager.fetch_with_fallback("stock_spot")
@@ -359,26 +346,16 @@ def fetch_market_data():
                 data["market"]["total_vol"] = round(float(stocks["成交额"].sum()) / 1e8, 2)
                 market_success = True
                 logging.info("✅ 涨跌数据获取成功（全列表统计）")
-            else:
-                logging.warning("全列表统计返回空")
         except Exception as e2:
             logging.error(f"全列表统计失败: {e2}")
 
-    # 如果仍然失败，从缓存加载
     if not market_success:
         cache = load_cache()
         if cache.get('market'):
             data["market"] = cache['market']
             logging.info("✅ 从缓存加载涨跌数据")
         else:
-            data["market"] = {
-                "up": None,
-                "down": None,
-                "flat": None,
-                "limit_up": None,
-                "limit_down": None,
-                "total_vol": None
-            }
+            data["market"] = {}
             logging.error("❌ 所有涨跌数据源均失败，涨跌数据不可用")
 
     # ===== 3. 行业板块 =====
@@ -395,12 +372,9 @@ def fetch_market_data():
             data["sector_bottom5"] = [[str(n), round(float(p), 2)] for n, p in bottom5]
             sector_success = True
             logging.info("✅ 行业板块数据获取成功")
-        else:
-            logging.warning("行业板块接口返回空")
     except Exception as e:
         logging.error(f"行业板块异常: {e}")
 
-    # 如果失败，从缓存加载
     if not sector_success:
         cache = load_cache()
         if cache.get('sector_top5') and cache.get('sector_bottom5'):
@@ -425,8 +399,6 @@ def fetch_market_data():
             data["fund_out"] = [[str(n), round(float(v)/1e4, 2)] for n, v in fund_out]
             fund_success = True
             logging.info("✅ 资金流向数据获取成功")
-        else:
-            logging.warning("资金流向接口返回空")
     except Exception as e:
         logging.error(f"资金流向异常: {e}")
 
@@ -443,13 +415,13 @@ def fetch_market_data():
 
     # ===== 5. 消息面 =====
     news = fetch_market_news_with_fallback()
-    data["news"] = news if news else []  # 空列表，不在模板中显示
+    data["news"] = news if news else []
 
-    # ===== 保存缓存（仅保存真实数据） =====
+    # ===== 6. 保存缓存 =====
     cache_data = {}
     if data["indices"]:
         cache_data['indices'] = data["indices"]
-    if data["market"] and any(v is not None for v in data["market"].values()):
+    if data["market"]:
         cache_data['market'] = data["market"]
     if data["sector_top5"]:
         cache_data['sector_top5'] = data["sector_top5"]

@@ -9,7 +9,6 @@ def generate_risk_alerts(data):
     """
     risks = []
 
-    # 检查数据是否可用
     indices = data.get('indices', {})
     if not indices:
         return ["📊 指数数据暂不可用，无法生成风险提示"]
@@ -33,7 +32,7 @@ def generate_risk_alerts(data):
     weekly = data.get('weekly', {})
     vol_trend = weekly.get('vol_trend', [])
 
-    # ---------- 风险1：业绩披露风险（基于日期动态判断） ----------
+    # ---------- 风险1：业绩披露风险 ----------
     now = datetime.now()
     month = now.month
     day = now.day
@@ -59,7 +58,6 @@ def generate_risk_alerts(data):
 
     # ---------- 风险2：套牢盘压力 ----------
     if sh_price is not None and sh_price > 0:
-        # 获取近期高点（从周数据）
         index_trend = weekly.get('index_trend', {})
         if index_trend:
             recent_high = max(index_trend.values())
@@ -109,11 +107,10 @@ def generate_risk_alerts(data):
             risks.append("🌍 需关注海外市场波动对明日A股开盘情绪的影响")
             break
 
-    # ---------- 如果没有任何风险触发 ----------
+    # ---------- 如果没有风险触发 ----------
     if not risks:
         if sh_pct is not None and cy_pct is not None:
             risks.append(f"📊 上证指数{sh_pct:+.2f}%，创业板{cy_pct:+.2f}%，市场整体运行平稳")
-            risks.append("📊 关注量能变化、外部事件及业绩披露情况")
         else:
             risks.append("📊 指数数据不完整，部分风险判断不可用")
 
