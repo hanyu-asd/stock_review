@@ -89,7 +89,6 @@ class DataSourceManager:
                     market = Market.SH
                 return client.get_stock_kline(market, code, count=200)
             elif data_type == "board_ranking":
-                # 板块资金流向排名
                 return client.get_board_ranking()
             elif data_type == "capital_flow":
                 market = kwargs.get('market', Market.SH)
