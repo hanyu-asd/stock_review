@@ -18,7 +18,7 @@ def main():
     logging.info("🚀 开始执行盘后复盘自动化任务")
 
     try:
-        # 1. 采集数据（自动使用最近交易日）
+        # 1. 采集数据
         logging.info("📊 步骤1: 采集市场数据...")
         data = fetch_market_data()
 
@@ -37,6 +37,9 @@ def main():
         # 3. 动态风险提示
         logging.info("⚠️ 步骤3: 动态生成风险提示...")
         data['risks'] = generate_risk_alerts(data)
+
+        # 🧪 验证索引键名
+        logging.info(f"🔍 indices keys: {list(data['indices'].keys())}")
 
         # 4. 生成报告
         logging.info("📝 步骤4: 生成复盘报告...")
