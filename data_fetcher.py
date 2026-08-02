@@ -13,13 +13,11 @@ logging.basicConfig(level=logging.INFO)
 
 manager = DataSourceManager()
 
-# ---------- 全局缓存 ----------
+# ---------- 缓存 ----------
 CACHE_FILE = "./data_cache.json"
 CACHE_EXPIRE_HOURS = 24
 
-
 def load_cache():
-    """加载缓存数据"""
     if os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE, 'r', encoding='utf-8') as f:
@@ -31,9 +29,7 @@ def load_cache():
             pass
     return {}
 
-
 def save_cache(data):
-    """保存缓存数据"""
     try:
         cache = {
             '_timestamp': datetime.now().isoformat(),
@@ -44,7 +40,7 @@ def save_cache(data):
     except:
         pass
 
-
+# ---------- 交易日 ----------
 def get_last_trading_day(target_date=None):
     if target_date is None:
         target_date = datetime.now()
@@ -65,11 +61,9 @@ def get_last_trading_day(target_date=None):
         return last
     return target_date.strftime('%Y-%m-%d')
 
-
-# ========== 消息面催化：7层备用数据源 ==========
-
+# ---------- 消息面 ----------
 def fetch_market_news_with_fallback():
-    """7层备用数据源，全部为真实新闻源，全部失败时返回空列表"""
+    """7层备用数据源，全部为真实新闻源"""
     # 第1层：levistock
     try:
         import levistock as lk
@@ -162,15 +156,11 @@ def fetch_market_news_with_fallback():
     except Exception as e:
         logging.warning(f"华尔街见闻失败: {e}")
 
-    # 全部失败：返回空列表
-    logging.warning("所有新闻源均失败，消息面将显示为「暂无可显示消息」")
+    logging.warning("所有新闻源均失败")
     return []
 
-
-# ========== 周趋势 ==========
-
+# ---------- 周趋势 ----------
 def fetch_weekly_summary(last_date_str):
-    """从真实历史数据获取周趋势"""
     try:
         df = manager.fetch_with_fallback("index_daily", symbol="sh000001")
         if df is None or df.empty:
@@ -195,12 +185,9 @@ def fetch_weekly_summary(last_date_str):
                     }
     except Exception as e:
         logging.warning(f"周趋势获取失败: {e}")
-
     return {"trend_direction": "未知", "trend_strength": None, "dates": [], "vol_trend": [], "index_trend": {}}
 
-
-# ========== 主数据获取函数 ==========
-
+# ---------- 主数据获取 ----------
 def fetch_market_data():
     data_date_str = get_last_trading_day()
     logging.info(f"📅 使用数据日期: {data_date_str}")
@@ -303,62 +290,91 @@ def fetch_market_data():
             data["indices"] = {}
             logging.error("❌ 所有指数数据源均失败，指数数据不可用")
 
-    # ===== 2. 涨跌数据 =====
+    # ===== 2. 消息面 =====
+    news = fetch_market_news_with_fallback()
+    data["news"] = news if news else []
+
+    # ===== 3. 涨跌数据（核心：优先 easy_tdx market_stat） =====
     market_success = False
+    market_data = {}
+
+    # 方式 A：easy_tdx market_stat（最稳定）
     try:
-        activity = manager.fetch_with_fallback("market_activity")
-        if activity is not None and not activity.empty:
-            row = activity.iloc[-1]
-            up_col = next((c for c in activity.columns if '上涨' in c or '涨家数' in c), None)
-            down_col = next((c for c in activity.columns if '下跌' in c or '跌家数' in c), None)
-            flat_col = next((c for c in activity.columns if '平盘' in c or '平家数' in c), None)
-            limit_up_col = next((c for c in activity.columns if '涨停' in c), None)
-            limit_down_col = next((c for c in activity.columns if '跌停' in c), None)
-
-            if up_col and down_col:
-                data["market"]["up"] = int(row[up_col])
-                data["market"]["down"] = int(row[down_col])
-                data["market"]["flat"] = int(row[flat_col]) if flat_col else 0
-                data["market"]["limit_up"] = int(row[limit_up_col]) if limit_up_col else 0
-                data["market"]["limit_down"] = int(row[limit_down_col]) if limit_down_col else 0
-                total_vol = 0
-                for idx in data["indices"].values():
-                    vol = idx.get("成交额")
-                    if vol is not None:
-                        total_vol += vol
-                data["market"]["total_vol"] = round(total_vol, 2) if total_vol > 0 else None
+        stat = manager.fetch_with_fallback("market_stat")
+        if stat is not None:
+            # 返回的 stat 可能为 dict 或 DataFrame
+            if isinstance(stat, dict):
+                market_data = {
+                    "up": stat.get("up_count"),
+                    "down": stat.get("down_count"),
+                    "flat": stat.get("neutral_count"),
+                    "limit_up": stat.get("limit_up_count"),
+                    "limit_down": stat.get("limit_down_count"),
+                }
+            elif hasattr(stat, 'to_dict'):
+                # 如果是 DataFrame，转换为 dict
+                record = stat.iloc[-1] if len(stat) > 0 else stat
+                market_data = {
+                    "up": record.get("up_count"),
+                    "down": record.get("down_count"),
+                    "flat": record.get("neutral_count"),
+                    "limit_up": record.get("limit_up_count"),
+                    "limit_down": record.get("limit_down_count"),
+                }
+            # 检查是否都有值
+            if all(v is not None for v in market_data.values()):
                 market_success = True
-                logging.info(f"✅ 市场情绪数据获取成功: 上涨{data['market']['up']}家，下跌{data['market']['down']}家")
-            else:
-                logging.warning("市场情绪接口返回数据但列名未匹配")
+                logging.info(f"✅ easy_tdx market_stat 成功: 上涨{market_data['up']}家，下跌{market_data['down']}家")
     except Exception as e:
-        logging.warning(f"市场情绪聚合数据获取失败: {e}")
+        logging.warning(f"easy_tdx market_stat 失败: {e}")
 
+    # 方式 B：akshare stock_spot 统计（备用）
     if not market_success:
         try:
             stocks = manager.fetch_with_fallback("stock_spot")
             if stocks is not None and not stocks.empty:
-                data["market"]["up"] = int((stocks["涨跌幅"] > 0).sum())
-                data["market"]["down"] = int((stocks["涨跌幅"] < 0).sum())
-                data["market"]["flat"] = int((stocks["涨跌幅"] == 0).sum())
-                data["market"]["limit_up"] = int((stocks["涨跌幅"] >= 9.9).sum())
-                data["market"]["limit_down"] = int((stocks["涨跌幅"] <= -9.9).sum())
-                data["market"]["total_vol"] = round(float(stocks["成交额"].sum()) / 1e8, 2)
+                market_data = {
+                    "up": int((stocks["涨跌幅"] > 0).sum()),
+                    "down": int((stocks["涨跌幅"] < 0).sum()),
+                    "flat": int((stocks["涨跌幅"] == 0).sum()),
+                    "limit_up": int((stocks["涨跌幅"] >= 9.9).sum()),
+                    "limit_down": int((stocks["涨跌幅"] <= -9.9).sum()),
+                }
                 market_success = True
-                logging.info("✅ 涨跌数据获取成功（全列表统计）")
-        except Exception as e2:
-            logging.error(f"全列表统计失败: {e2}")
+                logging.info("✅ akshare stock_spot 统计成功")
+        except Exception as e:
+            logging.warning(f"akshare stock_spot 统计失败: {e}")
 
+    # 方式 C：缓存
     if not market_success:
         cache = load_cache()
         if cache.get('market'):
-            data["market"] = cache['market']
+            market_data = cache['market']
+            market_success = True
             logging.info("✅ 从缓存加载涨跌数据")
-        else:
-            data["market"] = {}
-            logging.error("❌ 所有涨跌数据源均失败，涨跌数据不可用")
 
-    # ===== 3. 行业板块 =====
+    # 最终赋值
+    if market_success:
+        # 填充成交额（从指数数据累加）
+        total_vol = 0
+        for idx in data["indices"].values():
+            vol = idx.get("成交额")
+            if vol is not None and vol > 0:
+                total_vol += vol
+        market_data["total_vol"] = round(total_vol, 2) if total_vol > 0 else None
+        data["market"] = market_data
+    else:
+        data["market"] = {
+            "up": None,
+            "down": None,
+            "flat": None,
+            "limit_up": None,
+            "limit_down": None,
+            "total_vol": None
+        }
+        logging.error("❌ 所有涨跌数据源均失败，涨跌数据不可用")
+
+    # ===== 4. 行业板块 =====
     sector_success = False
     try:
         sector = manager.fetch_with_fallback("sector")
@@ -386,7 +402,7 @@ def fetch_market_data():
             data["sector_bottom5"] = []
             logging.error("❌ 行业板块数据不可用")
 
-    # ===== 4. 资金流向 =====
+    # ===== 5. 资金流向 =====
     fund_success = False
     try:
         fund = manager.fetch_with_fallback("fund_flow")
@@ -413,15 +429,11 @@ def fetch_market_data():
             data["fund_out"] = []
             logging.error("❌ 资金流向数据不可用")
 
-    # ===== 5. 消息面 =====
-    news = fetch_market_news_with_fallback()
-    data["news"] = news if news else []
-
     # ===== 6. 保存缓存 =====
     cache_data = {}
     if data["indices"]:
         cache_data['indices'] = data["indices"]
-    if data["market"]:
+    if data["market"] and any(v is not None for v in data["market"].values()):
         cache_data['market'] = data["market"]
     if data["sector_top5"]:
         cache_data['sector_top5'] = data["sector_top5"]
