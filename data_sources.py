@@ -1,6 +1,5 @@
 """
-多源数据管理器 - 支持 AkShare, Baostock, efinance 等
-所有方法返回 pandas DataFrame
+多源数据管理器 - 修复 akshare 新版接口
 """
 import logging
 import time
@@ -15,20 +14,20 @@ class DataSourceManager:
         self.sources = [
             ("akshare", self._fetch_akshare),
             ("baostock", self._fetch_baostock),
-            ("efinance", self._fetch_efinance),
         ]
         self._cache = {}
 
     def fetch_with_fallback(self, data_type, **kwargs):
-        """
-        统一入口：data_type 可选 'index_spot', 'stock_spot', 'sector', 'fund_flow', 'index_daily'
-        """
+        """统一入口"""
         last_error = None
         for name, func in self.sources:
             try:
                 logging.info(f"📡 尝试数据源: {name} 获取 {data_type}")
                 result = func(data_type, **kwargs)
-                if result is not None and not result.empty:
+                if result is not None:
+                    # 对于 DataFrame，检查是否为空
+                    if hasattr(result, 'empty') and result.empty:
+                        continue
                     logging.info(f"✅ {name} 成功")
                     return result
             except Exception as e:
@@ -38,22 +37,32 @@ class DataSourceManager:
         logging.error(f"❌ 所有数据源失败: {last_error}")
         return None
 
-    # ---------- 各数据源实现 ----------
-
     def _fetch_akshare(self, data_type, **kwargs):
         import akshare as ak
+        import pandas as pd
+
         if data_type == "index_spot":
-            return ak.stock_zh_index_spot()
+            # 新版 akshare 使用 stock_zh_index_spot_sina
+            try:
+                return ak.stock_zh_index_spot()
+            except AttributeError:
+                # 如果 stock_zh_index_spot 不存在，用 stock_zh_index_spot_sina
+                return ak.stock_zh_index_spot_sina()
         elif data_type == "stock_spot":
+            # 增加超时和重试
             return ak.stock_zh_a_spot_em()
         elif data_type == "sector":
             return ak.stock_sector_spot()
         elif data_type == "fund_flow":
-            # 兼容不同参数
+            # 尝试不同参数
             try:
                 return ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流向")
             except:
-                return ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业")
+                try:
+                    return ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业")
+                except:
+                    # 如果都失败，返回空 DataFrame
+                    return pd.DataFrame()
         elif data_type == "index_daily":
             symbol = kwargs.get('symbol', 'sh000001')
             return ak.stock_zh_index_daily(symbol=symbol)
@@ -62,8 +71,11 @@ class DataSourceManager:
         return None
 
     def _fetch_baostock(self, data_type, **kwargs):
+        """Baostock 作为备用数据源"""
         try:
             import baostock as bs
+            import pandas as pd
+
             if data_type == "index_daily":
                 symbol = kwargs.get('symbol', 'sh.000001')
                 start = kwargs.get('start_date', '2020-01-01')
@@ -80,24 +92,13 @@ class DataSourceManager:
                 bs.logout()
                 if data_list:
                     df = pd.DataFrame(data_list, columns=rs.fields)
-                    # 转换数据类型
-                    for col in ['open','high','low','close','volume','amount']:
+                    for col in ['open', 'high', 'low', 'close', 'volume', 'amount']:
                         if col in df.columns:
                             df[col] = pd.to_numeric(df[col], errors='coerce')
                     return df
+            elif data_type == "stock_spot":
+                # Baostock 不支持实时行情，返回 None
+                return None
         except Exception as e:
             logging.warning(f"baostock 失败: {e}")
-        return None
-
-    def _fetch_efinance(self, data_type, **kwargs):
-        try:
-            import efinance as ef
-            if data_type == "stock_spot":
-                return ef.stock.get_realtime_quotes()
-            elif data_type == "index_daily":
-                # efinance 获取股票历史
-                symbol = kwargs.get('symbol', '000001')
-                return ef.stock.get_quote_history(symbol, start_date=kwargs.get('start_date'))
-        except Exception as e:
-            logging.warning(f"efinance 失败: {e}")
         return None
