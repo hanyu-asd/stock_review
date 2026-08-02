@@ -53,10 +53,14 @@ class DataSourceManager:
         elif data_type == "sector":
             return ak.stock_sector_spot()
         elif data_type == "fund_flow":
+            # 修复：尝试不同参数组合
             try:
                 return ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流向")
             except:
-                return ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业")
+                try:
+                    return ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业")
+                except:
+                    return ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="板块")
         elif data_type == "index_daily":
             symbol = kwargs.get('symbol', 'sh000001')
             return ak.stock_zh_index_daily(symbol=symbol)
@@ -72,8 +76,26 @@ class DataSourceManager:
 
         with MacClient.from_best_host() as client:
             if data_type == "market_stat":
-                # 返回 DataFrame，列包含 up_count, down_count, neutral_count, limit_up_count, limit_down_count
-                return client.get_market_stat()
+                # 修正：正确的方法名是 get_market_info
+                try:
+                    return client.get_market_info()
+                except AttributeError:
+                    # 如果 get_market_info 也不存在，尝试 get_market_statistics
+                    try:
+                        return client.get_market_statistics()
+                    except AttributeError:
+                        # 最终尝试 get_market_overview
+                        return client.get_market_overview()
+            elif data_type == "stock_spot":
+                # easy_tdx 获取实时行情
+                try:
+                    # 获取全市场股票列表
+                    stocks = client.get_stock_list()
+                    if stocks:
+                        return client.get_quote_batch(stocks[:50])  # 限制数量避免超时
+                except:
+                    pass
+                return None
             elif data_type == "index_daily":
                 symbol = kwargs.get('symbol', 'sh000001')
                 if symbol.startswith('sh'):
