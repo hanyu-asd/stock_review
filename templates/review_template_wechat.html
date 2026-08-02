@@ -19,6 +19,7 @@
     </tr>
     {% endfor %}
 </table>
+<!-- ⚠️ 关键修复：此处使用方括号 -->
 <p style="font-size: 13px; background: #e8f0fe; padding: 10px 14px; border-radius: 6px; color: #1a5a9c;">📌 创业板指大涨 {{ "%.2f"|format(data.indices['创业板指'].涨跌幅) }}%，上证50微跌 {{ "%.2f"|format(data.indices['上证50'].涨跌幅|abs) }}%，题材强权重弱。</p>
 <hr style="border: none; border-top: 1px solid #ddd;">
 
