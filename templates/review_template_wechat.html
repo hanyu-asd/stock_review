@@ -62,8 +62,13 @@
     涨跌停差 <strong>{% if limit_up is not none and limit_down is not none %}+{{ limit_up - limit_down }}{% else %}数据暂不可用{% endif %}</strong>
 </p>
 <p style="font-size: 13px; background: #f0fdf4; padding: 10px 14px; border-radius: 6px; color: #166534;">
-    {% if up is not none and down is not none and flat is not none %}
-    ✅ 上涨占比 {{ "%.1f"|format(up/(up+down+flat)*100) }}%
+    {% if data.market.up is not none and data.market.down is not none and data.market.flat is not none %}
+    {% set total = data.market.up + data.market.down + data.market.flat %}
+    {% if total > 0 %}
+    ✅ 上涨占比 {{ "%.1f"|format(data.market.up/total*100) }}%
+    {% else %}
+    ✅ 市场数据异常，无法计算占比
+    {% endif %}
     {% else %}
     ✅ 市场情绪数据暂不可用
     {% endif %}

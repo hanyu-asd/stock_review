@@ -194,50 +194,73 @@ def calculate_change_pct(current, previous):
         return None
     return round((current - previous) / previous * 100, 2)
 
-# ---------- 市场情绪：Stoke（优先） ----------
+# ============================================================
+# 市场情绪：多数据源（Stoke → Baostock → akshare → 缓存）
+# ============================================================
+
 def fetch_market_stats_from_stoke(date_str):
     """
     使用 Stoke 获取全市场实时行情并统计涨跌家数
-    Stoke 是个人开发者友好库，无限制
     """
     try:
         import stoke
+    except ImportError:
+        logging.warning("Stoke 未安装，跳过")
+        return None
+
+    try:
         s = stoke.Stoke()
-        # 获取全市场实时报价 (假设方法为 quote)
-        # 如果方法不同，可尝试 s.realtime() 或 s.get_quote()
-        try:
-            df = s.quote()
-        except AttributeError:
-            df = s.realtime()
-        if df is not None and not df.empty:
-            # 计算涨跌家数
-            up = (df['涨跌幅'] > 0).sum()
-            down = (df['涨跌幅'] < 0).sum()
-            flat = (df['涨跌幅'] == 0).sum()
-            limit_up = (df['涨跌幅'] >= 9.9).sum()
-            limit_down = (df['涨跌幅'] <= -9.9).sum()
-            logging.info(f"✅ Stoke 市场情绪获取成功: 上涨{up}, 下跌{down}, 涨停{limit_up}, 跌停{limit_down}")
-            return {
-                "up": int(up),
-                "down": int(down),
-                "flat": int(flat),
-                "limit_up": int(limit_up),
-                "limit_down": int(limit_down)
-            }
-        else:
+        # 尝试获取实时行情
+        df = None
+        for method in ['quote', 'realtime', 'get_quote']:
+            try:
+                df = getattr(s, method)()
+                if df is not None and not df.empty:
+                    break
+            except:
+                continue
+        if df is None or df.empty:
             logging.warning("Stoke 返回空数据")
             return None
-    except ImportError:
-        logging.warning("Stoke 未安装，降级到 Baostock")
-        return None
+
+        # 检查列名
+        if '涨跌幅' not in df.columns:
+            # 尝试其他列名
+            for col in df.columns:
+                if '涨跌' in col or 'pct' in col.lower():
+                    df['涨跌幅'] = df[col]
+                    break
+            else:
+                logging.warning("Stoke 数据中无涨跌幅列")
+                return None
+
+        up = (df['涨跌幅'] > 0).sum()
+        down = (df['涨跌幅'] < 0).sum()
+        flat = (df['涨跌幅'] == 0).sum()
+        limit_up = (df['涨跌幅'] >= 9.9).sum()
+        limit_down = (df['涨跌幅'] <= -9.9).sum()
+        logging.info(f"✅ Stoke 市场情绪获取成功: 上涨{up}, 下跌{down}, 涨停{limit_up}, 跌停{limit_down}")
+        return {
+            "up": int(up),
+            "down": int(down),
+            "flat": int(flat),
+            "limit_up": int(limit_up),
+            "limit_down": int(limit_down)
+        }
     except Exception as e:
         logging.warning(f"Stoke 获取失败: {e}")
         return None
 
-# ---------- 市场情绪：Baostock（降级） ----------
+
 def fetch_market_stats_from_baostock(date_str):
-    import baostock as bs
-    import time
+    """
+    使用 Baostock 获取全市场涨跌数据（全量查询）
+    """
+    try:
+        import baostock as bs
+    except ImportError:
+        logging.warning("Baostock 未安装，跳过")
+        return None
 
     logging.info(f"📊 从 Baostock 获取 {date_str} 全市场涨跌数据...")
 
@@ -250,6 +273,7 @@ def fetch_market_stats_from_baostock(date_str):
         stock_list = bs.query_all_stock()
         if stock_list.error_code != '0':
             logging.error(f"获取股票列表失败: {stock_list.error_msg}")
+            bs.logout()
             return None
 
         all_codes = []
@@ -258,6 +282,11 @@ def fetch_market_stats_from_baostock(date_str):
             code = row[0]
             if (code.startswith('sh') or code.startswith('sz')) and not code.endswith('B'):
                 all_codes.append(code)
+
+        if not all_codes:
+            logging.error("Baostock 返回股票列表为空")
+            bs.logout()
+            return None
 
         logging.info(f"📈 共 {len(all_codes)} 只 A 股，开始查询...")
 
@@ -312,6 +341,39 @@ def fetch_market_stats_from_baostock(date_str):
         bs.logout()
         return None
 
+
+def fetch_market_stats_from_akshare(date_str):
+    """
+    使用 akshare 获取全市场实时行情并统计涨跌家数（备用）
+    """
+    try:
+        # 优先使用新浪源
+        try:
+            df = ak.stock_zh_a_spot()
+        except:
+            df = ak.stock_zh_a_spot_em()
+        if df is not None and not df.empty:
+            up = (df["涨跌幅"] > 0).sum()
+            down = (df["涨跌幅"] < 0).sum()
+            flat = (df["涨跌幅"] == 0).sum()
+            limit_up = (df["涨跌幅"] >= 9.9).sum()
+            limit_down = (df["涨跌幅"] <= -9.9).sum()
+            logging.info(f"✅ akshare 市场情绪获取成功: 上涨{up}, 下跌{down}, 涨停{limit_up}, 跌停{limit_down}")
+            return {
+                "up": int(up),
+                "down": int(down),
+                "flat": int(flat),
+                "limit_up": int(limit_up),
+                "limit_down": int(limit_down)
+            }
+        else:
+            logging.warning("akshare 返回空数据")
+            return None
+    except Exception as e:
+        logging.warning(f"akshare 市场情绪获取失败: {e}")
+        return None
+
+
 # ---------- 获取指数数据（easy-tdx 优先） ----------
 def fetch_index_data_with_easy_tdx(index_codes, date_str):
     result = {}
@@ -325,6 +387,11 @@ def fetch_index_data_with_easy_tdx(index_codes, date_str):
                 try:
                     code = info["code"]
                     market = Market.SH if info["market"] == "SH" else Market.SZ
+                    # 对于5位或特殊代码（如932000），尝试转换为6位或跳过
+                    if len(code) == 5 and code.startswith('93'):
+                        # 中证2000等新指数，easy-tdx 可能不支持，跳过
+                        logging.warning(f"easy-tdx 可能不支持 {name}({code})，跳过")
+                        continue
                     df = client.get_stock_kline(market, code, count=2)
                     if df is not None and not df.empty:
                         df = df.sort_values('datetime')
@@ -357,6 +424,7 @@ def fetch_index_data_with_easy_tdx(index_codes, date_str):
         logging.error(f"easy-tdx 连接失败: {e}")
 
     return result
+
 
 # ---------- 主数据获取 ----------
 def fetch_market_data():
@@ -481,23 +549,28 @@ def fetch_market_data():
                     df = manager.fetch_with_fallback("index_daily", symbol=symbol)
                     if df is not None and not df.empty:
                         if 'date' in df.columns:
-                            df['date'] = pd.to_datetime(df['date'])
-                            df = df.sort_values('date')
-                            last_two = df.tail(2)
-                            if len(last_two) >= 2:
-                                current = float(last_two.iloc[-1]["close"])
-                                previous = float(last_two.iloc[-2]["close"])
-                                pct = calculate_change_pct(current, previous)
-                            else:
-                                current = float(last_two.iloc[-1]["close"])
-                                pct = None
-                            amount = float(last_two.iloc[-1].get("amount", 0))
-                            data["indices"][name] = {
-                                "最新价": round(current, 2),
-                                "涨跌幅": pct,
-                                "振幅": None,
-                                "成交额": round(amount / 1e8, 2) if amount > 0 else None
-                            }
+                            date_col = 'date'
+                        elif 'datetime' in df.columns:
+                            date_col = 'datetime'
+                        else:
+                            date_col = 'date'
+                        df[date_col] = pd.to_datetime(df[date_col])
+                        df = df.sort_values(date_col)
+                        last_two = df.tail(2)
+                        if len(last_two) >= 2:
+                            current = float(last_two.iloc[-1]["close"])
+                            previous = float(last_two.iloc[-2]["close"])
+                            pct = calculate_change_pct(current, previous)
+                        else:
+                            current = float(last_two.iloc[-1]["close"])
+                            pct = None
+                        amount = float(last_two.iloc[-1].get("amount", 0))
+                        data["indices"][name] = {
+                            "最新价": round(current, 2),
+                            "涨跌幅": pct,
+                            "振幅": None,
+                            "成交额": round(amount / 1e8, 2) if amount > 0 else None
+                        }
                 except Exception as e2:
                     logging.warning(f"获取 {name} 历史日线失败: {e2}")
             if data["indices"]:
@@ -518,9 +591,8 @@ def fetch_market_data():
     news = fetch_market_news_with_fallback()
     data["news"] = news if news else []
 
-    # ===== 3. 涨跌数据（市场情绪）：Stoke 优先，降级 Baostock =====
+    # ===== 3. 涨跌数据（市场情绪）：多数据源降级 =====
     market_data = None
-    # 尝试从缓存加载
     cache = load_cache()
     if cache.get('market'):
         market_data = cache['market']
@@ -540,8 +612,15 @@ def fetch_market_data():
                 market_data = baostock_data
                 logging.info("✅ Baostock 获取成功")
             else:
-                market_data = {"up": None, "down": None, "flat": None, "limit_up": None, "limit_down": None}
-                logging.error("❌ 所有市场情绪数据源均失败")
+                # 再降级 akshare
+                logging.info("⚠️ Baostock 失败，降级 akshare...")
+                akshare_data = fetch_market_stats_from_akshare(data_date_str)
+                if akshare_data:
+                    market_data = akshare_data
+                    logging.info("✅ akshare 获取成功")
+                else:
+                    market_data = {"up": None, "down": None, "flat": None, "limit_up": None, "limit_down": None}
+                    logging.error("❌ 所有市场情绪数据源均失败")
 
     # 填充成交额
     total_vol = 0
