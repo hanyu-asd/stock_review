@@ -1,6 +1,5 @@
 """
 多源数据管理器 - 集成 AkShare, easy-tdx, TickFlow, Baostock
-支持自动故障转移
 """
 import logging
 import time
@@ -42,7 +41,6 @@ class DataSourceManager:
         logging.error(f"❌ 所有数据源均失败: {last_error}")
         return None
 
-    # ---------- AkShare ----------
     def _fetch_akshare(self, data_type, **kwargs):
         import akshare as ak
         if data_type == "index_spot":
@@ -52,12 +50,6 @@ class DataSourceManager:
                 return ak.stock_zh_index_spot_sina()
         elif data_type == "stock_spot":
             return ak.stock_zh_a_spot_em()
-        elif data_type == "market_activity":
-            # 注意：akshare 可能没有此接口，保留用于未来兼容
-            try:
-                return ak.stock_market_activity_em()
-            except AttributeError:
-                return None
         elif data_type == "sector":
             return ak.stock_sector_spot()
         elif data_type == "fund_flow":
@@ -72,7 +64,6 @@ class DataSourceManager:
             return ak.stock_news_em()
         return None
 
-    # ---------- easy-tdx ----------
     def _fetch_easy_tdx(self, data_type, **kwargs):
         try:
             from easy_tdx import MacClient, Market
@@ -81,11 +72,8 @@ class DataSourceManager:
 
         with MacClient.from_best_host() as client:
             if data_type == "market_stat":
-                # 直接获取全市场情绪统计（涨跌家数、涨停跌停）
+                # 返回 DataFrame，列包含 up_count, down_count, neutral_count, limit_up_count, limit_down_count
                 return client.get_market_stat()
-            elif data_type == "stock_spot":
-                logging.warning("easy-tdx 暂不支持批量实时行情，跳过")
-                return None
             elif data_type == "index_daily":
                 symbol = kwargs.get('symbol', 'sh000001')
                 if symbol.startswith('sh'):
@@ -100,16 +88,13 @@ class DataSourceManager:
                 return client.get_stock_kline(market, code, count=200)
         return None
 
-    # ---------- TickFlow ----------
     def _fetch_tickflow(self, data_type, **kwargs):
         try:
             import tickflow as tf
         except ImportError:
             raise ImportError("tickflow 未安装")
 
-        if data_type == "stock_spot":
-            return None
-        elif data_type == "index_daily":
+        if data_type == "index_daily":
             symbol = kwargs.get('symbol', '000001.SZ')
             if symbol.startswith('sh'):
                 symbol = symbol[2:] + '.SH'
@@ -118,7 +103,6 @@ class DataSourceManager:
             return tf.klines.get(symbol, period="1d", count=200, as_dataframe=True)
         return None
 
-    # ---------- Baostock ----------
     def _fetch_baostock(self, data_type, **kwargs):
         try:
             import baostock as bs

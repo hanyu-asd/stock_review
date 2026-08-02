@@ -63,7 +63,7 @@ def get_last_trading_day(target_date=None):
 
 # ---------- 消息面 ----------
 def fetch_market_news_with_fallback():
-    """7层备用数据源，全部为真实新闻源"""
+    """7层备用数据源"""
     # 第1层：levistock
     try:
         import levistock as lk
@@ -80,8 +80,6 @@ def fetch_market_news_with_fallback():
                 if filtered:
                     logging.info(f"✅ levistock: {len(filtered[:3])}条")
                     return filtered[:3]
-    except ImportError:
-        logging.warning("levistock 未安装，跳过")
     except Exception as e:
         logging.warning(f"levistock 失败: {e}")
 
@@ -187,6 +185,13 @@ def fetch_weekly_summary(last_date_str):
         logging.warning(f"周趋势获取失败: {e}")
     return {"trend_direction": "未知", "trend_strength": None, "dates": [], "vol_trend": [], "index_trend": {}}
 
+# ---------- 计算涨跌幅 ----------
+def calculate_change_pct(current, previous):
+    """计算涨跌幅"""
+    if previous is None or previous == 0:
+        return None
+    return round((current - previous) / previous * 100, 2)
+
 # ---------- 主数据获取 ----------
 def fetch_market_data():
     data_date_str = get_last_trading_day()
@@ -204,8 +209,12 @@ def fetch_market_data():
         "weekly": fetch_weekly_summary(data_date_str)
     }
 
-    # ===== 1. 指数数据 =====
+    # ===== 1. 指数数据：优先实时接口获取涨跌幅 =====
     indices_success = False
+    index_close = {}
+    index_change = {}
+
+    # 先尝试实时接口
     try:
         spot = manager.fetch_with_fallback("index_spot")
         if spot is not None and not spot.empty:
@@ -245,12 +254,14 @@ def fetch_market_data():
                         "振幅": round(float(r.get(cols['振幅'], 0)), 2),
                         "成交额": round(float(r.get(cols['成交额'], 0)) / 1e8, 2)
                     }
+                    index_close[name] = float(r.get(cols['最新价'], 0))
             if data["indices"]:
                 indices_success = True
                 logging.info(f"✅ 指数实时数据成功，共 {len(data['indices'])} 条")
     except Exception as e:
         logging.warning(f"实时指数获取失败: {e}")
 
+    # 如果实时接口失败，从历史日线获取点位并计算涨跌幅
     if not indices_success:
         try:
             index_codes = {
@@ -266,13 +277,22 @@ def fetch_market_data():
                     if df is not None and not df.empty:
                         df['date'] = pd.to_datetime(df['date'])
                         df = df.sort_values('date')
-                        last = df.iloc[-1]
+                        # 获取最近两天数据计算涨跌幅
+                        last_two = df.tail(2)
+                        if len(last_two) >= 2:
+                            current = float(last_two.iloc[-1]["close"])
+                            previous = float(last_two.iloc[-2]["close"])
+                            pct = calculate_change_pct(current, previous)
+                        else:
+                            current = float(last_two.iloc[-1]["close"])
+                            pct = None
                         data["indices"][name] = {
-                            "最新价": round(float(last["close"]), 2),
-                            "涨跌幅": None,
+                            "最新价": round(current, 2),
+                            "涨跌幅": pct,
                             "振幅": None,
-                            "成交额": round(float(last.get("amount", 0)) / 1e8, 2)
+                            "成交额": round(float(last_two.iloc[-1].get("amount", 0)) / 1e8, 2)
                         }
+                        index_close[name] = current
                 except Exception as e2:
                     logging.warning(f"获取 {name} 历史日线失败: {e2}")
             if data["indices"]:
@@ -281,6 +301,7 @@ def fetch_market_data():
         except Exception as e2:
             logging.error(f"历史日线降级失败: {e2}")
 
+    # 最终降级：从缓存加载
     if not indices_success:
         cache = load_cache()
         if cache.get('indices'):
@@ -294,7 +315,7 @@ def fetch_market_data():
     news = fetch_market_news_with_fallback()
     data["news"] = news if news else []
 
-    # ===== 3. 涨跌数据（核心：优先 easy_tdx market_stat） =====
+    # ===== 3. 涨跌数据（市场情绪） =====
     market_success = False
     market_data = {}
 
@@ -302,33 +323,52 @@ def fetch_market_data():
     try:
         stat = manager.fetch_with_fallback("market_stat")
         if stat is not None:
-            # 返回的 stat 可能为 dict 或 DataFrame
+            # 处理不同的返回类型
             if isinstance(stat, dict):
                 market_data = {
                     "up": stat.get("up_count"),
                     "down": stat.get("down_count"),
-                    "flat": stat.get("neutral_count"),
+                    "flat": stat.get("neutral_count") or stat.get("flat_count"),
                     "limit_up": stat.get("limit_up_count"),
                     "limit_down": stat.get("limit_down_count"),
                 }
-            elif hasattr(stat, 'to_dict'):
-                # 如果是 DataFrame，转换为 dict
+            elif hasattr(stat, 'iloc') and hasattr(stat, 'columns'):
+                # DataFrame
                 record = stat.iloc[-1] if len(stat) > 0 else stat
-                market_data = {
-                    "up": record.get("up_count"),
-                    "down": record.get("down_count"),
-                    "flat": record.get("neutral_count"),
-                    "limit_up": record.get("limit_up_count"),
-                    "limit_down": record.get("limit_down_count"),
-                }
-            # 检查是否都有值
-            if all(v is not None for v in market_data.values()):
+                # 查找列名
+                up_col = next((c for c in stat.columns if 'up' in c.lower()), None)
+                down_col = next((c for c in stat.columns if 'down' in c.lower()), None)
+                neutral_col = next((c for c in stat.columns if 'neutral' in c.lower() or 'flat' in c.lower()), None)
+                limit_up_col = next((c for c in stat.columns if 'limit_up' in c.lower()), None)
+                limit_down_col = next((c for c in stat.columns if 'limit_down' in c.lower()), None)
+                
+                if up_col:
+                    market_data = {
+                        "up": int(record[up_col]) if record[up_col] is not None else None,
+                        "down": int(record[down_col]) if down_col and record[down_col] is not None else None,
+                        "flat": int(record[neutral_col]) if neutral_col and record[neutral_col] is not None else None,
+                        "limit_up": int(record[limit_up_col]) if limit_up_col and record[limit_up_col] is not None else None,
+                        "limit_down": int(record[limit_down_col]) if limit_down_col and record[limit_down_col] is not None else None,
+                    }
+            elif isinstance(stat, (list, tuple)):
+                # 尝试从列表中解析
+                if len(stat) > 0 and isinstance(stat[0], dict):
+                    market_data = {
+                        "up": stat[0].get("up_count"),
+                        "down": stat[0].get("down_count"),
+                        "flat": stat[0].get("neutral_count"),
+                        "limit_up": stat[0].get("limit_up_count"),
+                        "limit_down": stat[0].get("limit_down_count"),
+                    }
+            
+            # 检查是否有有效数据
+            if market_data.get('up') is not None and market_data.get('down') is not None:
                 market_success = True
                 logging.info(f"✅ easy_tdx market_stat 成功: 上涨{market_data['up']}家，下跌{market_data['down']}家")
     except Exception as e:
         logging.warning(f"easy_tdx market_stat 失败: {e}")
 
-    # 方式 B：akshare stock_spot 统计（备用）
+    # 方式 B：akshare stock_spot 统计
     if not market_success:
         try:
             stocks = manager.fetch_with_fallback("stock_spot")
@@ -353,9 +393,8 @@ def fetch_market_data():
             market_success = True
             logging.info("✅ 从缓存加载涨跌数据")
 
-    # 最终赋值
+    # 填充成交额
     if market_success:
-        # 填充成交额（从指数数据累加）
         total_vol = 0
         for idx in data["indices"].values():
             vol = idx.get("成交额")
@@ -405,7 +444,12 @@ def fetch_market_data():
     # ===== 5. 资金流向 =====
     fund_success = False
     try:
-        fund = manager.fetch_with_fallback("fund_flow")
+        # 尝试不同的参数组合
+        try:
+            fund = manager.fetch_with_fallback("fund_flow")
+        except:
+            fund = None
+        
         if fund is not None and not fund.empty:
             name_col = next((c for c in fund.columns if '名称' in c or '板块' in c), fund.columns[0])
             flow_col = next((c for c in fund.columns if '主力净流入' in c or '净流入' in c), fund.columns[1])
