@@ -2,9 +2,8 @@ name: 📈 A股每日复盘推送
 
 on:
   schedule:
-    # 每个交易日（周一至周五）北京时间 15:35 运行
-    - cron: '35 7 * * 1-5'
-  workflow_dispatch:   # 手动触发
+    - cron: '35 7 * * 1-5'   # 北京时间 15:35
+  workflow_dispatch:
 
 jobs:
   review:
@@ -26,12 +25,16 @@ jobs:
       - name: 🚀 运行复盘脚本
         run: python main.py
         env:
+          # 邮件配置
           EMAIL_SMTP_SERVER: ${{ secrets.EMAIL_SMTP_SERVER }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_FROM_PASSWORD: ${{ secrets.EMAIL_FROM_PASSWORD }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          # AI 配置
+          MODELSCOPE_SDK_TOKEN: ${{ secrets.MODELSCOPE_SDK_TOKEN }}
+          MODELSCOPE_MODEL: ${{ secrets.MODELSCOPE_MODEL }}
 
-      - name: 📁 上传报告（可选）
+      - name: 📁 上传报告
         if: always()
         uses: actions/upload-artifact@v4
         with:

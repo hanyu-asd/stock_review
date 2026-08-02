@@ -58,20 +58,18 @@
 <hr style="border: none; border-top: 1px solid #ddd;">
 
 <p style="font-size: 17px; font-weight: 700; color: #333; margin-bottom: 10px;">五、消息面催化</p>
-<p style="font-size: 14px;">🌍 <strong>海外映射：</strong>微软大涨15.51%，全球资金回流AI赛道。</p>
-<p style="font-size: 14px;">🏗️ <strong>产业逻辑：</strong>算力基建第一波落幕，转向AI应用落地第二波行情。</p>
-<p style="font-size: 14px;">📋 <strong>政策预期：</strong>「十五五」算力网建设新增直接投资 <strong>4万亿元</strong>。</p>
+{% if data.news %}
+  {% for item in data.news %}
+<p style="font-size: 14px; margin: 4px 0;">📌 {{ item }}</p>
+  {% endfor %}
+{% else %}
+<p style="font-size: 14px; color: #888;">今日暂无重大要闻</p>
+{% endif %}
 <hr style="border: none; border-top: 1px solid #ddd;">
 
 <p style="font-size: 17px; font-weight: 700; color: #333; margin-bottom: 10px;">六、明日展望</p>
-<p style="font-size: 14px;">📌 <strong>核心判断：</strong>8月开门大概率是结构市，市场震荡磨底。</p>
-<p style="font-size: 14px;">
-    🎯 <strong>配置策略：</strong><br>
-    • 进攻端：低位AI软件、多模态AIGC、行业应用<br>
-    • 防守端：中特估、高分红权重<br>
-    • 回避方向：高位AI硬件、无业绩支撑概念股
-</p>
-<p style="font-size: 14px;">⚖️ <strong>仓位建议：</strong>7-8成。</p>
+<p style="font-size: 14px;">📌 <strong>核心判断：</strong>{{ data.ai_core }}</p>
+<p style="font-size: 14px;">🎯 <strong>配置建议：</strong>{{ data.ai_config }}</p>
 <hr style="border: none; border-top: 1px solid #ddd;">
 
 <p style="font-size: 17px; font-weight: 700; color: #e67e22; margin-bottom: 10px;">⚠️ 风险提示</p>
