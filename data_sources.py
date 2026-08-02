@@ -49,18 +49,19 @@ class DataSourceManager:
             except AttributeError:
                 return ak.stock_zh_index_spot_sina()
         elif data_type == "stock_spot":
-            return ak.stock_zh_a_spot_em()
+            try:
+                return ak.stock_zh_a_spot()
+            except:
+                return ak.stock_zh_a_spot_em()
         elif data_type == "sector":
             return ak.stock_sector_spot()
         elif data_type == "fund_flow":
-            # 修复：尝试不同参数组合
-            try:
-                return ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流向")
-            except:
+            for sector_type in ["行业资金流向", "行业", "板块"]:
                 try:
-                    return ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业")
+                    return ak.stock_sector_fund_flow_rank(indicator="今日", sector_type=sector_type)
                 except:
-                    return ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="板块")
+                    continue
+            return None
         elif data_type == "index_daily":
             symbol = kwargs.get('symbol', 'sh000001')
             return ak.stock_zh_index_daily(symbol=symbol)
@@ -75,28 +76,7 @@ class DataSourceManager:
             raise ImportError("easy-tdx 未安装")
 
         with MacClient.from_best_host() as client:
-            if data_type == "market_stat":
-                # 修正：正确的方法名是 get_market_info
-                try:
-                    return client.get_market_info()
-                except AttributeError:
-                    # 如果 get_market_info 也不存在，尝试 get_market_statistics
-                    try:
-                        return client.get_market_statistics()
-                    except AttributeError:
-                        # 最终尝试 get_market_overview
-                        return client.get_market_overview()
-            elif data_type == "stock_spot":
-                # easy_tdx 获取实时行情
-                try:
-                    # 获取全市场股票列表
-                    stocks = client.get_stock_list()
-                    if stocks:
-                        return client.get_quote_batch(stocks[:50])  # 限制数量避免超时
-                except:
-                    pass
-                return None
-            elif data_type == "index_daily":
+            if data_type == "index_daily":
                 symbol = kwargs.get('symbol', 'sh000001')
                 if symbol.startswith('sh'):
                     code = symbol[2:]
@@ -108,6 +88,13 @@ class DataSourceManager:
                     code = symbol
                     market = Market.SH
                 return client.get_stock_kline(market, code, count=200)
+            elif data_type == "board_ranking":
+                # 板块资金流向排名
+                return client.get_board_ranking()
+            elif data_type == "capital_flow":
+                market = kwargs.get('market', Market.SH)
+                code = kwargs.get('code', '000001')
+                return client.get_capital_flow(market, code)
         return None
 
     def _fetch_tickflow(self, data_type, **kwargs):
