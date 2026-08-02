@@ -7,3 +7,4 @@ feedparser>=6.0.10
 levistock>=0.1.0
 easy-tdx>=0.1.0
 tickflow>=0.1.0
+stoke>=0.1.0

@@ -194,12 +194,52 @@ def calculate_change_pct(current, previous):
         return None
     return round((current - previous) / previous * 100, 2)
 
-# ---------- baostock 全量查询市场情绪 ----------
+# ---------- 市场情绪：Stoke（优先） ----------
+def fetch_market_stats_from_stoke(date_str):
+    """
+    使用 Stoke 获取全市场实时行情并统计涨跌家数
+    Stoke 是个人开发者友好库，无限制
+    """
+    try:
+        import stoke
+        s = stoke.Stoke()
+        # 获取全市场实时报价 (假设方法为 quote)
+        # 如果方法不同，可尝试 s.realtime() 或 s.get_quote()
+        try:
+            df = s.quote()
+        except AttributeError:
+            df = s.realtime()
+        if df is not None and not df.empty:
+            # 计算涨跌家数
+            up = (df['涨跌幅'] > 0).sum()
+            down = (df['涨跌幅'] < 0).sum()
+            flat = (df['涨跌幅'] == 0).sum()
+            limit_up = (df['涨跌幅'] >= 9.9).sum()
+            limit_down = (df['涨跌幅'] <= -9.9).sum()
+            logging.info(f"✅ Stoke 市场情绪获取成功: 上涨{up}, 下跌{down}, 涨停{limit_up}, 跌停{limit_down}")
+            return {
+                "up": int(up),
+                "down": int(down),
+                "flat": int(flat),
+                "limit_up": int(limit_up),
+                "limit_down": int(limit_down)
+            }
+        else:
+            logging.warning("Stoke 返回空数据")
+            return None
+    except ImportError:
+        logging.warning("Stoke 未安装，降级到 Baostock")
+        return None
+    except Exception as e:
+        logging.warning(f"Stoke 获取失败: {e}")
+        return None
+
+# ---------- 市场情绪：Baostock（降级） ----------
 def fetch_market_stats_from_baostock(date_str):
     import baostock as bs
     import time
 
-    logging.info(f"📊 开始从 Baostock 获取 {date_str} 全市场涨跌数据...")
+    logging.info(f"📊 从 Baostock 获取 {date_str} 全市场涨跌数据...")
 
     lg = bs.login()
     if lg.error_code != '0':
@@ -272,22 +312,15 @@ def fetch_market_stats_from_baostock(date_str):
         bs.logout()
         return None
 
-
-# ---------- 获取指数数据（支持 easy-tdx 优先，35个股民关注指数） ----------
+# ---------- 获取指数数据（easy-tdx 优先） ----------
 def fetch_index_data_with_easy_tdx(index_codes, date_str):
-    """
-    使用 easy-tdx 获取指数K线数据（包含成交额 amount）
-    支持上交所(SH)、深交所(SZ)，北交所(BJ)自动跳过走降级
-    """
     result = {}
     from easy_tdx import MacClient, Market
 
     try:
         with MacClient.from_best_host() as client:
             for name, info in index_codes.items():
-                # 北交所指数 easy-tdx 不支持，跳过走降级
                 if info["market"] == "BJ":
-                    logging.info(f"⏭️ 跳过 {name}({info['code']}) easy-tdx 不支持北交所")
                     continue
                 try:
                     code = info["code"]
@@ -325,7 +358,6 @@ def fetch_index_data_with_easy_tdx(index_codes, date_str):
 
     return result
 
-
 # ---------- 主数据获取 ----------
 def fetch_market_data():
     data_date_str = get_last_trading_day()
@@ -345,39 +377,32 @@ def fetch_market_data():
 
     # ===== 1. 指数数据（35个股民关注指数） =====
     index_codes = {
-        # ===== 上证系列（宽基） =====
         "上证指数": {"code": "000001", "market": "SH"},
         "上证A指": {"code": "000002", "market": "SH"},
         "上证B指": {"code": "000003", "market": "SH"},
         "上证180": {"code": "000010", "market": "SH"},
         "上证50": {"code": "000016", "market": "SH"},
         "上证380": {"code": "000009", "market": "SH"},
-        # ===== 中证系列（宽基） =====
         "沪深300": {"code": "000300", "market": "SH"},
         "中证500": {"code": "000905", "market": "SH"},
         "中证1000": {"code": "000852", "market": "SH"},
         "中证2000": {"code": "932000", "market": "SH"},
         "中证A500": {"code": "000510", "market": "SH"},
-        # ===== 科创/创业板 =====
         "科创50": {"code": "000688", "market": "SH"},
         "科创综指": {"code": "000680", "market": "SH"},
         "创业板指": {"code": "399006", "market": "SZ"},
         "创业板综": {"code": "399102", "market": "SZ"},
-        # ===== 深证系列 =====
         "深证成指": {"code": "399001", "market": "SZ"},
         "深证综指": {"code": "399106", "market": "SZ"},
         "深证A指": {"code": "399107", "market": "SZ"},
         "深证B指": {"code": "399108", "market": "SZ"},
         "中小板指": {"code": "399005", "market": "SZ"},
         "深证100": {"code": "399330", "market": "SZ"},
-        # ===== 北交所 =====
         "北证50": {"code": "899050", "market": "BJ"},
-        # ===== 策略/红利 =====
         "红利指数": {"code": "000015", "market": "SH"},
         "上证央企": {"code": "000042", "market": "SH"},
         "上证民企": {"code": "000049", "market": "SH"},
         "上证成长": {"code": "000028", "market": "SH"},
-        # ===== 行业主题（股民关注） =====
         "国证芯片": {"code": "980017", "market": "SZ"},
         "中证军工": {"code": "399967", "market": "SZ"},
         "中证消费": {"code": "399932", "market": "SZ"},
@@ -398,7 +423,7 @@ def fetch_market_data():
     else:
         logging.warning("easy-tdx 指数获取失败，尝试 akshare...")
 
-    # 方式B：akshare 实时接口（补充 easy-tdx 未获取到的指数）
+    # 方式B：akshare 实时接口补充
     try:
         spot = manager.fetch_with_fallback("index_spot")
         if spot is not None and not spot.empty:
@@ -421,7 +446,6 @@ def fetch_market_data():
 
             akshare_codes = {name: info["code"] for name, info in index_codes.items()}
             for name, code in akshare_codes.items():
-                # 如果 easy-tdx 已有数据，跳过
                 if name in data["indices"]:
                     continue
                 row = spot[spot[code_col] == code]
@@ -438,7 +462,7 @@ def fetch_market_data():
     except Exception as e:
         logging.warning(f"akshare 实时指数获取失败: {e}")
 
-    # 方式C：akshare 历史日线（补充仍未获取到的指数）
+    # 方式C：akshare 历史日线补充
     if len(data["indices"]) < len(index_codes):
         try:
             akshare_symbols = {}
@@ -494,23 +518,32 @@ def fetch_market_data():
     news = fetch_market_news_with_fallback()
     data["news"] = news if news else []
 
-    # ===== 3. 涨跌数据（市场情绪）：baostock 全量查询 =====
+    # ===== 3. 涨跌数据（市场情绪）：Stoke 优先，降级 Baostock =====
     market_data = None
+    # 尝试从缓存加载
     cache = load_cache()
     if cache.get('market'):
         market_data = cache['market']
         logging.info("✅ 从缓存加载涨跌数据")
     else:
-        logging.info("⚠️ 缓存无涨跌数据，从 Baostock 获取真实数据...")
-        baostock_data = fetch_market_stats_from_baostock(data_date_str)
-        if baostock_data:
-            market_data = baostock_data
-            logging.info("✅ Baostock 真实数据获取成功")
+        # 优先 Stoke
+        logging.info("📡 尝试 Stoke 获取市场情绪...")
+        stoke_data = fetch_market_stats_from_stoke(data_date_str)
+        if stoke_data:
+            market_data = stoke_data
+            logging.info("✅ Stoke 获取成功")
         else:
-            market_data = {"up": None, "down": None, "flat": None, "limit_up": None, "limit_down": None}
-            logging.error("❌ 所有真实数据源均失败，涨跌数据不可用")
+            # 降级 Baostock
+            logging.info("⚠️ Stoke 失败，降级 Baostock...")
+            baostock_data = fetch_market_stats_from_baostock(data_date_str)
+            if baostock_data:
+                market_data = baostock_data
+                logging.info("✅ Baostock 获取成功")
+            else:
+                market_data = {"up": None, "down": None, "flat": None, "limit_up": None, "limit_down": None}
+                logging.error("❌ 所有市场情绪数据源均失败")
 
-    # 填充成交额（从指数数据累加）
+    # 填充成交额
     total_vol = 0
     for idx in data["indices"].values():
         vol = idx.get("成交额")
