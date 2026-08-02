@@ -26,19 +26,19 @@ def main():
         logging.info("🤖 步骤2: AI生成明日展望...")
         ai_result = call_ai_analysis(data)
         if ai_result:
-            data['ai_core'] = ai_result.get('core', '')
-            data['ai_config'] = ai_result.get('config', '')
+            data['ai_core'] = ai_result.get('core', '') or "AI分析结果为空"
+            data['ai_config'] = ai_result.get('config', '') or "AI分析结果为空"
         else:
             template = generate_template_outlook(data)
-            data['ai_core'] = template['core']
-            data['ai_config'] = template['config']
+            data['ai_core'] = template.get('core', '数据暂不可用')
+            data['ai_config'] = template.get('config', '数据暂不可用')
             logging.info("使用模板降级生成展望")
 
         # 3. 动态风险提示
         logging.info("⚠️ 步骤3: 动态生成风险提示...")
         data['risks'] = generate_risk_alerts(data)
 
-        # 调试：打印指数键名
+        # 调试
         logging.info(f"🔍 indices keys: {list(data['indices'].keys())}")
 
         # 4. 生成报告
